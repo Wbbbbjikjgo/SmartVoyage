@@ -101,6 +101,14 @@ async def chat(request: ChatRequest) -> ChatResponse:
             else:
                 message = "任务已完成。"
 
+            # Append default-values notice (e.g. date defaulted to tomorrow)
+            defaults_used = result.get("defaults_used")
+            if defaults_used:
+                defaults_desc = "、".join(
+                    d.split("=")[1] if "=" in d else d for d in defaults_used
+                )
+                message += f"（未指定日期，已默认使用：{defaults_desc}）"
+
             # Add assistant message to context
             context_manager.add_message(session_id, "assistant", message)
 

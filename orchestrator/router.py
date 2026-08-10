@@ -76,6 +76,9 @@ class AgentRouter:
         """
         params = dict(slots)
 
+        # Keep duration aside before filtering (used for hotel check_out default)
+        duration_hint = params.get("duration")
+
         # Apply slot name mapping
         mapping = self.slot_mapping.get(agent_name, {})
         for slot_key, param_name in mapping.items():
@@ -89,14 +92,34 @@ class AgentRouter:
         if required:
             params = {k: v for k, v in params.items() if k in required}
 
-        # Fill default check_out for hotels (check_in + 1 day)
-        if skill_name == "search_hotels" and "check_in" in params and "check_out" not in params:
-            try:
-                from datetime import date, timedelta
-                check_in = date.fromisoformat(params["check_in"])
-                params["check_out"] = (check_in + timedelta(days=1)).isoformat()
-            except (ValueError, TypeError):
-                pass
+        # Fill sensible defaults for date-related params so users are not forced to repeat
+        from datetime import date, timedelta
+        tomorrow = (date.today() + timedelta(days=1)).isoformat()
+
+        if skill_name == "search_flights" and not params.get("date"):
+            params["date"] = tomorrow
+            params.setdefault("_defaults_used", []).append("date=明天")
+
+        if skill_name == "search_hotels":
+            if not params.get("check_in"):
+                params["check_in"] = tomorrow
+                params.setdefault("_defaults_used", []).append("check_in=明天")
+            if not params.get("check_out"):
+                try:
+                    check_in = date.fromisoformat(params["check_in"])
+                    duration = int(duration_hint or 2)
+                    params["check_out"] = (check_in + timedelta(days=duration)).isoformat()
+                    params.setdefault("_defaults_used", []).append(f"check_out={params['check_out']}")
+                except (ValueError, TypeError):
+                    params["check_out"] = (date.today() + timedelta(days=3)).isoformat()
+
+        if skill_name == "create_itinerary":
+            if not params.get("start_date"):
+                params["start_date"] = tomorrow
+                params.setdefault("_defaults_used", []).append("start_date=明天")
+            if not params.get("duration"):
+                params["duration"] = 3
+                params.setdefault("_defaults_used", []).append("duration=3天")
 
         return params
 
@@ -159,6 +182,9 @@ class AgentRouter:
         if skill_name == "create_itinerary" and "user_id" not in parameters:
             parameters["user_id"] = 1
 
+        # Strip internal metadata before invoking the skill
+        defaults_used = parameters.pop("_defaults_used", None)
+
         result = await self.network.invoke_agent(agent_name, skill_name, parameters)
 
         return {
@@ -167,6 +193,7 @@ class AgentRouter:
             "intent": intent_result.intent.value,
             "confidence": intent_result.confidence,
             "slots": slots,
+            "defaults_used": defaults_used,
             "data": result,
         }
 

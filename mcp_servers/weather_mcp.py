@@ -14,19 +14,34 @@ logger = logging.getLogger(__name__)
 _MOCK_CONDITIONS = [
     ("晴", "100"), ("多云", "101"), ("阴", "104"),
     ("小雨", "305"), ("中雨", "306"), ("雷阵雨", "302"),
+    ("大雨", "307"), ("小雪", "400"), ("中雪", "401"),
+    ("大雪", "402"), ("雾", "501"), ("霾", "502"),
+    ("扬沙", "503"), ("晴间多云", "150"),
 ]
+
+_MOCK_WIND_DIRECTIONS = ["北风", "东北风", "东风", "东南风", "南风", "西南风", "西风", "西北风"]
 
 
 def _mock_current_weather(location: str) -> Dict[str, Any]:
     """Generate mock current weather data."""
     text, icon = random.choice(_MOCK_CONDITIONS)
+    temperature = round(random.uniform(5, 35), 1)
+    humidity = random.randint(30, 90)
+    wind_speed = round(random.uniform(1, 30), 1)
     return {
         "location": location,
-        "temperature": round(random.uniform(5, 35), 1),
+        "temperature": temperature,
+        "feels_like": round(temperature + random.uniform(-3, 3), 1),
         "description": text,
-        "humidity": random.randint(30, 90),
-        "wind_speed": round(random.uniform(1, 30), 1),
-        "wind_direction": random.choice(["北风", "东北风", "东风", "东南风", "南风", "西南风", "西风", "西北风"]),
+        "humidity": humidity,
+        "wind_speed": wind_speed,
+        "wind_scale": random.randint(1, 8),
+        "wind_direction": random.choice(_MOCK_WIND_DIRECTIONS),
+        "pressure": random.randint(990, 1035),
+        "visibility": random.choice([5, 8, 10, 15, 20, 25, 30]),
+        "precipitation": round(random.uniform(0, 25), 1),
+        "uv_index": random.randint(0, 10),
+        "cloud": random.randint(0, 100),
         "icon": icon,
         "update_time": datetime.now().isoformat(),
         "mock": True,
@@ -49,6 +64,8 @@ def _mock_forecast(location: str, days: int) -> Dict[str, Any]:
             "description_night": text_night,
             "humidity": random.randint(30, 90),
             "wind_speed": round(random.uniform(1, 30), 1),
+            "wind_direction": random.choice(_MOCK_WIND_DIRECTIONS),
+            "precipitation": round(random.uniform(0, 30), 1),
             "icon_day": icon_day,
             "icon_night": icon_night,
         })

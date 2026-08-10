@@ -86,6 +86,27 @@ def display_weather_card(weather_data: Dict[str, Any]):
 
     st.info(f"**{weather_data.get('location', '')}** - {weather_data.get('description', '')}")
 
+    details = []
+    if "feels_like" in weather_data:
+        details.append(f"体感 {weather_data['feels_like']}°C")
+    if "wind_direction" in weather_data:
+        details.append(f"{weather_data['wind_direction']}")
+    if "wind_scale" in weather_data:
+        details.append(f"{weather_data['wind_scale']}级")
+    if "pressure" in weather_data:
+        details.append(f"气压 {weather_data['pressure']}hPa")
+    if "visibility" in weather_data:
+        details.append(f"能见度 {weather_data['visibility']}km")
+    if "precipitation" in weather_data:
+        details.append(f"降水 {weather_data['precipitation']}mm")
+    if "uv_index" in weather_data:
+        details.append(f"紫外线 {weather_data['uv_index']}")
+    if "cloud" in weather_data:
+        details.append(f"云量 {weather_data['cloud']}%")
+
+    if details:
+        st.caption("  |  ".join(details))
+
 
 def display_flight_list(flight_data: Dict[str, Any]):
     """Display flight search results."""
@@ -100,7 +121,7 @@ def display_flight_list(flight_data: Dict[str, Any]):
 
     st.success(f"找到 {len(flights)} 个航班")
 
-    for flight in flights[:5]:  # Show top 5
+    for flight in flights[:8]:  # Show top 8
         with st.expander(f"✈️ {flight['flight_no']} - {flight['airline']}"):
             col1, col2, col3 = st.columns(3)
             with col1:
@@ -112,6 +133,23 @@ def display_flight_list(flight_data: Dict[str, Any]):
             with col3:
                 st.write(f"**价格**: ¥{flight['price']}")
                 st.write(f"**剩余座位**: {flight['available_seats']}")
+
+            flight_details = []
+            if "aircraft" in flight:
+                flight_details.append(f"机型 {flight['aircraft']}")
+            if "duration" in flight:
+                flight_details.append(f"飞行时长 {flight['duration']}")
+            if "on_time_rate" in flight:
+                flight_details.append(f"准点率 {flight['on_time_rate']}")
+            if "meal" in flight:
+                flight_details.append(flight["meal"])
+            if "stops" in flight:
+                flight_details.append(f"经停 {flight['stops']} 次")
+            if "discount" in flight:
+                flight_details.append(f"{flight['discount']}")
+
+            if flight_details:
+                st.caption("  |  ".join(flight_details))
 
 
 def display_hotel_list(hotel_data: Dict[str, Any]):
@@ -127,7 +165,7 @@ def display_hotel_list(hotel_data: Dict[str, Any]):
 
     st.success(f"找到 {len(hotels)} 家酒店")
 
-    for hotel in hotels[:5]:  # Show top 5
+    for hotel in hotels[:8]:  # Show top 8
         with st.expander(f"🏨 {hotel['hotel_name']}"):
             col1, col2 = st.columns(2)
             with col1:
@@ -136,6 +174,19 @@ def display_hotel_list(hotel_data: Dict[str, Any]):
             with col2:
                 st.write(f"**价格**: ¥{hotel['price_per_night']}/晚")
                 st.write(f"**设施**: {', '.join(hotel['amenities'][:4])}")
+
+            hotel_details = []
+            if "tags" in hotel:
+                hotel_details.append("、".join(hotel["tags"]))
+            if "breakfast" in hotel:
+                hotel_details.append(hotel["breakfast"])
+            if "distance_desc" in hotel:
+                hotel_details.append(hotel["distance_desc"])
+            if "review_count" in hotel:
+                hotel_details.append(f"{hotel['review_count']}条点评")
+
+            if hotel_details:
+                st.caption("  |  ".join(hotel_details))
 
 
 def render_sidebar():

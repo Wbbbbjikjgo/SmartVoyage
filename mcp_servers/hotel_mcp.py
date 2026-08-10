@@ -17,32 +17,30 @@ class HotelMCPServer:
 
         # Mock hotel chains
         self.hotel_chains = [
-            "如家酒店",
-            "汉庭酒店",
-            "锦江之星",
-            "7天连锁",
-            "希尔顿酒店",
-            "万豪酒店",
-            "洲际酒店",
-            "香格里拉酒店",
-            "皇冠假日酒店",
-            "假日酒店",
+            "如家酒店", "汉庭酒店", "锦江之星", "7天连锁", "全季酒店",
+            "亚朵酒店", "桔子酒店", "希尔顿酒店", "万豪酒店", "洲际酒店",
+            "香格里拉酒店", "皇冠假日酒店", "假日酒店", "凯悦酒店",
+            "四季酒店", "华住美居", "维也纳酒店", "格林豪泰",
         ]
 
         # Mock amenities
         self.amenities_list = [
-            "免费WiFi",
-            "停车场",
-            "早餐",
-            "健身房",
-            "游泳池",
-            "SPA",
-            "餐厅",
-            "会议室",
-            "洗衣服务",
-            "叫醒服务",
-            "行李寄存",
-            "前台24小时",
+            "免费WiFi", "停车场", "早餐", "健身房", "游泳池",
+            "SPA", "餐厅", "会议室", "洗衣服务", "叫醒服务",
+            "行李寄存", "前台24小时", "行政酒廊", "儿童乐园",
+            "接机服务", "咖啡厅", "商务中心", "无烟楼层",
+        ]
+
+        # Hotel tags for richer display
+        self.hotel_tags = [
+            "近地铁", "商务首选", "亲子推荐", "网红打卡", "高性价比",
+            "新开张", "含双早", "免费取消", "近景点", "江景房",
+        ]
+
+        # Room types pool
+        self.room_types_pool = [
+            "标准间", "大床房", "双床房", "豪华大床房", "行政套房",
+            "家庭房", "亲子房", "景观房",
         ]
 
         # Mock city districts
@@ -52,9 +50,17 @@ class HotelMCPServer:
             "广州": ["天河区", "越秀区", "海珠区", "荔湾区", "白云区", "番禺区"],
             "深圳": ["福田区", "罗湖区", "南山区", "宝安区", "龙岗区", "龙华区"],
             "成都": ["锦江区", "青羊区", "武侯区", "成华区", "高新区", "天府新区"],
-            "杭州": ["上城区", "下城区", "西湖区", "拱墅区", "滨江区", "余杭区"],
+            "杭州": ["上城区", "拱墅区", "西湖区", "滨江区", "余杭区", "萧山区"],
             "西安": ["雁塔区", "碑林区", "莲湖区", "未央区", "灞桥区", "长安区"],
             "重庆": ["渝中区", "江北区", "南岸区", "沙坪坝区", "九龙坡区", "渝北区"],
+            "武汉": ["武昌区", "江汉区", "洪山区", "江岸区", "汉阳区", "硚口区"],
+            "南京": ["玄武区", "秦淮区", "建邺区", "鼓楼区", "栖霞区", "江宁区"],
+            "长沙": ["芙蓉区", "天心区", "岳麓区", "开福区", "雨花区", "望城区"],
+            "青岛": ["市南区", "市北区", "崂山区", "黄岛区", "李沧区", "城阳区"],
+            "厦门": ["思明区", "湖里区", "集美区", "海沧区", "同安区", "翔安区"],
+            "三亚": ["吉阳区", "天涯区", "海棠区", "崖州区"],
+            "昆明": ["五华区", "盘龙区", "官渡区", "西山区", "呈贡区"],
+            "大连": ["中山区", "西岗区", "沙河口区", "甘井子区", "旅顺口区"],
         }
 
     async def search_hotels(
@@ -82,8 +88,8 @@ class HotelMCPServer:
             # Get districts for the city
             districts = self.city_districts.get(location, ["市中心"])
 
-            # Generate mock hotels (8-12 hotels)
-            num_hotels = random.randint(8, 12)
+            # Generate mock hotels (12-16 hotels for richer results)
+            num_hotels = random.randint(12, 16)
             hotels = []
 
             for i in range(num_hotels):
@@ -91,19 +97,22 @@ class HotelMCPServer:
                 district = random.choice(districts)
                 hotel_name = f"{chain}({location}{district}店)"
 
-                # Price: 150-1500 CNY per night
+                # Price: 150-1800 CNY per night
                 if price_range:
                     min_price, max_price = map(int, price_range.split("-"))
                     price = random.randint(min_price, max_price)
                 else:
-                    price = random.randint(15, 150) * 10
+                    price = random.randint(15, 180) * 10
 
                 # Rating: 3.5-5.0
                 rating = round(random.uniform(3.5, 5.0), 1)
 
-                # Random amenities (4-8 items)
-                num_amenities = random.randint(4, 8)
+                # Random amenities (4-9 items)
+                num_amenities = random.randint(4, 9)
                 amenities = random.sample(self.amenities_list, num_amenities)
+
+                # Random room types (2-5)
+                room_types = random.sample(self.room_types_pool, random.randint(2, 5))
 
                 hotels.append({
                     "hotel_name": hotel_name,
@@ -112,10 +121,13 @@ class HotelMCPServer:
                     "price_per_night": price,
                     "currency": "CNY",
                     "rating": rating,
-                    "review_count": random.randint(100, 5000),
+                    "review_count": random.randint(100, 8000),
+                    "tags": random.sample(self.hotel_tags, random.randint(1, 3)),
+                    "breakfast": random.choice(["含双早", "含单早", "不含早"]),
+                    "distance_desc": f"距市中心{round(random.uniform(0.5, 15), 1)}公里",
                     "amenities": amenities,
-                    "room_types": ["标准间", "大床房", "套房"][:random.randint(1, 3)],
-                    "available_rooms": random.randint(5, 50),
+                    "room_types": room_types,
+                    "available_rooms": random.randint(2, 50),
                 })
 
             # Sort by rating (descending)
