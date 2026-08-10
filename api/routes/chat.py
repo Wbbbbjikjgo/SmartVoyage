@@ -54,6 +54,17 @@ async def chat(request: ChatRequest) -> ChatResponse:
             agent_name = result.get("agent", "unknown")
             data = result.get("data", {})
 
+            # Missing slots prompt - return directly
+            if result.get("missing_slots"):
+                message = data.get("message", "请补充更多信息。")
+                context_manager.add_message(session_id, "assistant", message)
+                return ChatResponse(
+                    message=message,
+                    intent=result.get("intent"),
+                    data=data,
+                    session_id=session_id,
+                )
+
             # Generate response message based on agent and data
             if agent_name == "general":
                 message = data.get("message", "我是 SmartVoyage 智能旅行助手。")
@@ -137,18 +148,36 @@ async def plan_travel(request: ChatRequest) -> ChatResponse:
     context_manager.add_message(session_id, "user", request.message)
 
     try:
-        # For now, use a simple workflow execution
-        # In production, parse request for travel details
+        # Parse travel details from user message via intent recognition + slot filling
+        from core.intent_recognizer import intent_recognizer
+        from core.slot_filler import slot_filler
+        from models.schemas import IntentType
+
+        intent_result = await intent_recognizer.recognize(request.message)
+        slots = slot_filler.fill_slots(request.message, intent_result.slots)
+
+        destination = slots.get("destination", "北京")
+        start_date = slots.get("date") or slots.get("start_date") or "2026-08-20"
+        duration = slots.get("duration") or 3
+        departure = slots.get("departure")
+        budget = slots.get("budget")
+        guests = slots.get("guests") or 1
+
         result = await travel_workflow.execute(
             user_id=1,  # Default user for demo
-            destination="北京",
-            start_date="2026-08-20",
-            duration=3,
-            departure="上海",
+            destination=destination,
+            start_date=start_date,
+            duration=duration,
+            departure=departure,
+            budget=budget,
+            guests=guests,
         )
 
         if result.get("success"):
+            itinerary_id = result.get("itinerary_id")
             message = f"已为您规划 {result['destination']} 的 {result['duration']} 天行程。"
+            if itinerary_id:
+                message += f"行程已保存（ID：{itinerary_id}）。"
             context_manager.add_message(session_id, "assistant", message)
 
             return ChatResponse(

@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from api.routes import chat_router, agent_router
-from models.database import init_db, close_db
+from models.database import init_db, close_db, seed_default_user
 from configs.settings import settings
 
 # Configure logging
@@ -27,6 +27,7 @@ async def lifespan(app: FastAPI):
     # Initialize database
     try:
         init_db()
+        seed_default_user()
         logger.info("Database initialized successfully")
     except Exception as e:
         logger.error(f"Failed to initialize database: {e}")

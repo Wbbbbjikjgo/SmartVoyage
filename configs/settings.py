@@ -25,6 +25,10 @@ class Settings(BaseSettings):
         default="https://devapi.qweather.com",
         description="QWeather API base URL"
     )
+    qweather_mock_mode: bool = Field(
+        default=True,
+        description="Use mock weather data instead of real QWeather API"
+    )
 
     # MySQL Configuration
     mysql_host: str = Field(default="localhost")

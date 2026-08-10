@@ -128,6 +128,26 @@ def init_db():
     print(f"Database initialized: {settings.mysql_database}")
 
 
+def seed_default_user():
+    """Ensure the default demo user (user_id=1) exists."""
+    SessionLocal = get_session_factory()
+    session = SessionLocal()
+    try:
+        user = session.query(User).filter(User.user_id == 1).first()
+        if not user:
+            user = User(
+                name="演示用户",
+                email="demo@smartvoyage.local",
+                preferences={"theme": "light", "language": "zh-CN"},
+            )
+            session.add(user)
+            session.commit()
+            print("Default demo user created (user_id=1)")
+        return user.user_id
+    finally:
+        session.close()
+
+
 def close_db():
     """Close database connections."""
     global _engine, _SessionLocal

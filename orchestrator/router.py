@@ -1,7 +1,7 @@
 """Agent router for intelligent task routing."""
 
 import logging
-from typing import Dict, Any, Tuple, Optional
+from typing import Dict, Any, List, Tuple, Optional
 from models.schemas import IntentType, IntentResult
 from core.intent_recognizer import intent_recognizer
 from core.slot_filler import slot_filler
@@ -34,6 +34,71 @@ class AgentRouter:
             IntentType.HOTEL_BOOKING: "search_hotels",
             IntentType.ITINERARY_PLANNING: "create_itinerary",
         }
+
+        # Slot name mapping per agent (slot key -> skill parameter name)
+        self.slot_mapping: Dict[str, Dict[str, str]] = {
+            "weather": {"destination": "location"},
+            "hotel": {
+                "destination": "location",
+                "date": "check_in",
+                "guests": "guests",
+            },
+            "flight": {
+                "destination": "arrival",
+                "guests": "passengers",
+            },
+        }
+
+        # Required parameters per skill (to filter out extra slots)
+        self.skill_required_params: Dict[str, List[str]] = {
+            "get_current_weather": ["location"],
+            "search_flights": ["departure", "arrival", "date", "passengers"],
+            "search_hotels": ["location", "check_in", "check_out", "guests"],
+            "create_itinerary": ["user_id", "destination", "start_date", "duration", "budget"],
+        }
+
+    def _prepare_parameters(
+        self,
+        agent_name: str,
+        skill_name: str,
+        slots: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Prepare parameters for a skill call by mapping slot names.
+
+        Args:
+            agent_name: Agent name
+            skill_name: Skill name
+            slots: Extracted slots
+
+        Returns:
+            Mapped parameters dict
+        """
+        params = dict(slots)
+
+        # Apply slot name mapping
+        mapping = self.slot_mapping.get(agent_name, {})
+        for slot_key, param_name in mapping.items():
+            if slot_key in params and param_name not in params:
+                params[param_name] = params.pop(slot_key)
+            elif slot_key in params:
+                params.pop(slot_key)
+
+        # Filter to only parameters accepted by the skill
+        required = self.skill_required_params.get(skill_name)
+        if required:
+            params = {k: v for k, v in params.items() if k in required}
+
+        # Fill default check_out for hotels (check_in + 1 day)
+        if skill_name == "search_hotels" and "check_in" in params and "check_out" not in params:
+            try:
+                from datetime import date, timedelta
+                check_in = date.fromisoformat(params["check_in"])
+                params["check_out"] = (check_in + timedelta(days=1)).isoformat()
+            except (ValueError, TypeError):
+                pass
+
+        return params
 
     async def route(self, user_input: str) -> Dict[str, Any]:
         """
@@ -70,7 +135,31 @@ class AgentRouter:
 
         # Step 4: Invoke agent
         skill_name = self.intent_to_skill.get(intent_result.intent)
-        result = await self.network.invoke_agent(agent_name, skill_name, slots)
+        parameters = self._prepare_parameters(agent_name, skill_name, slots)
+
+        # Check required parameters
+        missing = [
+            p for p in self.skill_required_params.get(skill_name, [])
+            if p not in parameters and p not in ("passengers", "guests", "budget", "user_id")
+        ]
+        if missing:
+            return {
+                "success": True,
+                "agent": agent_name,
+                "intent": intent_result.intent.value,
+                "confidence": intent_result.confidence,
+                "slots": slots,
+                "missing_slots": missing,
+                "data": {
+                    "message": f"还需要以下信息才能完成查询：{', '.join(missing)}，请补充后重试。",
+                },
+            }
+
+        # Default user_id for itinerary creation
+        if skill_name == "create_itinerary" and "user_id" not in parameters:
+            parameters["user_id"] = 1
+
+        result = await self.network.invoke_agent(agent_name, skill_name, parameters)
 
         return {
             "success": True,

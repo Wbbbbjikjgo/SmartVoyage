@@ -15,6 +15,15 @@ class TravelPlanningWorkflow:
         """Initialize travel planning workflow."""
         self.network = agent_network
 
+    @staticmethod
+    def _unwrap(result: Dict[str, Any]) -> Dict[str, Any]:
+        """Unwrap agent skill result ({'success': True, 'data': ...} -> inner data)."""
+        if result.get("error"):
+            return result
+        if result.get("success") and isinstance(result.get("data"), dict):
+            return result["data"]
+        return result
+
     async def execute(
         self,
         user_id: int,
@@ -55,6 +64,7 @@ class TravelPlanningWorkflow:
                 "get_forecast",
                 {"location": destination, "days": duration},
             )
+            weather_result = self._unwrap(weather_result)
             result["steps"].append({
                 "step": "weather",
                 "status": "success" if not weather_result.get("error") else "error",
@@ -75,6 +85,7 @@ class TravelPlanningWorkflow:
                         "passengers": guests,
                     },
                 )
+                flight_result = self._unwrap(flight_result)
                 result["steps"].append({
                     "step": "flights",
                     "status": "success" if not flight_result.get("error") else "error",
@@ -99,6 +110,7 @@ class TravelPlanningWorkflow:
                     "guests": guests,
                 },
             )
+            hotel_result = self._unwrap(hotel_result)
             result["steps"].append({
                 "step": "hotels",
                 "status": "success" if not hotel_result.get("error") else "error",
@@ -119,6 +131,7 @@ class TravelPlanningWorkflow:
                     "budget": budget,
                 },
             )
+            itinerary_result = self._unwrap(itinerary_result)
             result["steps"].append({
                 "step": "create_itinerary",
                 "status": "success" if not itinerary_result.get("error") else "error",
@@ -150,6 +163,7 @@ class TravelPlanningWorkflow:
                                 },
                             },
                         )
+                        booking_result = self._unwrap(booking_result)
                         result["steps"].append({
                             "step": "book_flight",
                             "status": "success" if not booking_result.get("error") else "error",
@@ -175,6 +189,7 @@ class TravelPlanningWorkflow:
                                 },
                             },
                         )
+                        booking_result = self._unwrap(booking_result)
                         result["steps"].append({
                             "step": "book_hotel",
                             "status": "success" if not booking_result.get("error") else "error",

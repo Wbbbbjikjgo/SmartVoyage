@@ -28,9 +28,22 @@ class SlotFiller:
         """
         slots = initial_slots.copy() if initial_slots else {}
 
-        # Extract destination city
+        # Normalize relative dates the LLM may have kept as text
+        for key in ("date", "check_in", "check_out", "start_date"):
+            if key in slots and isinstance(slots[key], str):
+                normalized = self._normalize_date_text(slots[key])
+                if normalized:
+                    slots[key] = normalized
+
+        # Extract departure city first (needed to exclude from destination)
+        if "departure" not in slots:
+            departure = self._extract_departure(user_input)
+            if departure:
+                slots["departure"] = departure
+
+        # Extract destination city (excluding departure city)
         if "destination" not in slots:
-            destination = self._extract_city(user_input)
+            destination = self._extract_city(user_input, exclude=slots.get("departure"))
             if destination:
                 slots["destination"] = destination
 
@@ -58,16 +71,38 @@ class SlotFiller:
             if guests:
                 slots["guests"] = guests
 
-        # Extract departure city
-        if "departure" not in slots:
-            departure = self._extract_departure(user_input)
-            if departure:
-                slots["departure"] = departure
-
         return slots
 
-    def _extract_city(self, text: str) -> Optional[str]:
-        """Extract city name from text."""
+    def _normalize_date_text(self, text: str) -> Optional[str]:
+        """Normalize relative date text (e.g. '明天') to ISO date."""
+        today = date.today()
+        text = text.strip()
+        if text == "今天":
+            return today.isoformat()
+        if text == "明天":
+            return (today + timedelta(days=1)).isoformat()
+        if text == "后天":
+            return (today + timedelta(days=2)).isoformat()
+        # Already an ISO date
+        if re.match(r"\d{4}-\d{2}-\d{2}", text):
+            return text
+        # Chinese date formats: "8月15日" / "8月15号" / "2026年8月15日"
+        match = re.search(r"(?:(\d{4})年)?(\d{1,2})月(\d{1,2})[日号]", text)
+        if match:
+            year = int(match.group(1)) if match.group(1) else today.year
+            month, day = int(match.group(2)), int(match.group(3))
+            try:
+                target = date(year, month, day)
+                # If date already passed this year and no year specified, use next year
+                if not match.group(1) and target < today:
+                    target = date(year + 1, month, day)
+                return target.isoformat()
+            except ValueError:
+                return None
+        return None
+
+    def _extract_city(self, text: str, exclude: Optional[str] = None) -> Optional[str]:
+        """Extract city name from text, optionally excluding a city."""
         # Common Chinese cities
         cities = [
             "北京", "上海", "广州", "深圳", "成都", "杭州", "西安", "重庆",
@@ -77,9 +112,16 @@ class SlotFiller:
             "拉萨", "贵阳", "南宁", "呼和浩特",
         ]
 
-        for city in cities:
-            if city in text:
-                return city
+        # Prefer destination pattern "到X" (e.g. "从上海到北京" -> 北京)
+        to_match = re.search(r"到(.{2,4}?)(?:的|市|$|[\s，。])", text)
+        if to_match and to_match.group(1) in cities and to_match.group(1) != exclude:
+            return to_match.group(1)
+
+        # Otherwise return the first city in text order (by position, not list order)
+        candidates = [(text.find(c), c) for c in cities if c in text and c != exclude]
+        if candidates:
+            candidates.sort(key=lambda x: x[0])
+            return candidates[-1][1] if len(candidates) > 1 and exclude else candidates[0][1]
 
         return None
 
@@ -95,6 +137,10 @@ class SlotFiller:
         # Try relative dates
         today = date.today()
 
+        # "今天"
+        if "今天" in text:
+            return today.isoformat()
+
         # "明天"
         if "明天" in text:
             return (today + timedelta(days=1)).isoformat()
@@ -102,6 +148,11 @@ class SlotFiller:
         # "后天"
         if "后天" in text:
             return (today + timedelta(days=2)).isoformat()
+
+        # Chinese date formats via normalizer
+        normalized = self._normalize_date_text(text)
+        if normalized:
+            return normalized
 
         # "下周X"
         weekday_map = {
