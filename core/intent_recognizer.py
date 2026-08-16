@@ -30,12 +30,13 @@ class IntentRecognizer:
 可用的意图类型：
 1. weather_query - 天气查询（用户询问某个城市的天气）
 2. flight_booking - 机票预订（用户想查询或预订机票）
-3. hotel_booking - 酒店预订（用户想查询或预订酒店）
-4. itinerary_planning - 行程规划（用户想规划一个完整的旅行行程）
-5. general_qa - 通用问答（其他问题）
+3. train_booking - 高铁/火车票查询（用户想查询或预订高铁票、火车票）
+4. hotel_booking - 酒店预订（用户想查询或预订酒店）
+5. itinerary_planning - 行程规划（用户想规划一个完整的旅行行程）
+6. general_qa - 通用问答（其他问题）
 
 请分析用户输入，返回JSON格式的结果，包含：
-- intent: 意图类型（从上述5种中选择）
+- intent: 意图类型（从上述6种中选择）
 - confidence: 置信度（0-1之间的浮点数）
 - slots: 提取的槽位信息，可能包含：
   - destination: 目的地城市
@@ -157,6 +158,15 @@ class IntentRecognizer:
         if any(kw in input_lower for kw in flight_keywords):
             return IntentResult(
                 intent=IntentType.FLIGHT_BOOKING,
+                confidence=0.7,
+                slots={},
+            )
+
+        # Train keywords
+        train_keywords = ["高铁", "火车", "动车", "车票", "列车", "train"]
+        if any(kw in input_lower for kw in train_keywords):
+            return IntentResult(
+                intent=IntentType.TRAIN_BOOKING,
                 confidence=0.7,
                 slots={},
             )

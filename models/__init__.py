@@ -12,6 +12,7 @@ from .schemas import (
     IntentResult,
     WeatherData,
     FlightData,
+    TrainData,
     HotelData,
 )
 from .database import (
@@ -37,6 +38,7 @@ __all__ = [
     "IntentResult",
     "WeatherData",
     "FlightData",
+    "TrainData",
     "HotelData",
     # SQLAlchemy models
     "Base",

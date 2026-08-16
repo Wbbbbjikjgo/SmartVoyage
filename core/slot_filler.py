@@ -114,6 +114,13 @@ class SlotFiller:
             if guests:
                 slots["guests"] = guests
 
+        # ================================================================
+        # 第八步：判断是否仅需高铁（用于火车票查询）
+        # ================================================================
+        if "is_high_speed" not in slots:
+            if any(kw in user_input for kw in ("高铁", "动车", "城际")):
+                slots["is_high_speed"] = 1
+
         # 返回填充好的槽位字典
         return slots
 

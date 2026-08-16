@@ -17,10 +17,11 @@ from enum import Enum
 class IntentType(str, Enum):
     """
     用户意图类型枚举
-    作用：限制意图识别的结果只能是以下5种之一
+    作用：限制意图识别的结果只能是以下6种之一
     """
     WEATHER_QUERY = "weather_query"          # 查询天气
     FLIGHT_BOOKING = "flight_booking"        # 预订机票
+    TRAIN_BOOKING = "train_booking"          # 预订高铁/火车票
     HOTEL_BOOKING = "hotel_booking"          # 预订酒店
     ITINERARY_PLANNING = "itinerary_planning" # 行程规划
     GENERAL_QA = "general_qa"                # 通用问答（闲聊/其他）
@@ -220,48 +221,68 @@ class IntentResult(BaseModel):
 
 class WeatherData(BaseModel):
     """
-    天气数据格式
+    天气数据格式（高德开放平台归一化后）
     使用场景：调用天气 API 后的数据解析
     """
-    location: str                         # 城市/地点
-    temperature: float                    # 温度（摄氏度）
-    description: str                      # 天气描述（如：晴、多云、小雨）
-    humidity: int                         # 湿度百分比
-    wind_speed: float                     # 风速
-    icon: Optional[str] = None            # 天气图标标识
-    forecast: Optional[List[Dict[str, Any]]] = None
-    # 未来天气预报列表（可选）
+    location: str                          # 城市/地点
+    adcode: Optional[str] = None           # 行政区划编码
+    description: Optional[str] = None      # 天气描述（如：晴、多云、小雨）
+    temperature: Optional[float] = None    # 温度（摄氏度）
+    humidity: Optional[float] = None       # 湿度百分比
+    wind_direction: Optional[str] = None   # 风向
+    wind_power: Optional[str] = None       # 风力等级
+    report_time: Optional[str] = None      # 数据发布时间
+    forecast: Optional[List[Dict[str, Any]]] = None  # 天气预报列表（可选）
 
 
 class FlightData(BaseModel):
     """
-    航班数据格式
+    航班数据格式（阿里云 API 市场归一化后）
     使用场景：调用机票 API 后的数据解析
     """
-    flight_no: str                        # 航班号，如 "CA1234"
-    airline: str                          # 航空公司，如 "中国国航"
-    departure: str                        # 出发地
-    arrival: str                          # 目的地
-    departure_time: str                   # 起飞时间
-    arrival_time: str                     # 到达时间
-    price: Decimal                        # 票价（Decimal 保证金额精度）
-    currency: str = "CNY"                 # 货币单位，默认人民币
-    available_seats: int = 0              # 剩余座位数
+    flight_no: Optional[str] = None        # 航班号，如 "CA1234"
+    airline: Optional[str] = None          # 航空公司，如 "中国国航"
+    departure: Optional[str] = None        # 出发地
+    arrival: Optional[str] = None          # 目的地
+    departure_airport: Optional[str] = None  # 出发机场
+    arrival_airport: Optional[str] = None    # 到达机场
+    departure_time: Optional[str] = None   # 起飞时间
+    arrival_time: Optional[str] = None     # 到达时间
+    duration: Optional[str] = None         # 飞行时长
+    price: Optional[Decimal] = None        # 票价（Decimal 保证金额精度）
+    currency: str = "CNY"                  # 货币单位，默认人民币
+    available_seats: Optional[int] = None  # 剩余座位数
+
+
+class TrainData(BaseModel):
+    """
+    火车票数据格式（阿里云 API 市场归一化后）
+    使用场景：调用火车票 API 后的数据解析
+    """
+    train_no: Optional[str] = None         # 车次号，如 "G123"
+    train_type: Optional[str] = None       # 列车类型（高铁/动车/普速）
+    departure: Optional[str] = None        # 出发地
+    arrival: Optional[str] = None          # 到达地
+    departure_station: Optional[str] = None  # 出发站
+    arrival_station: Optional[str] = None    # 到达站
+    departure_time: Optional[str] = None   # 发车时间
+    arrival_time: Optional[str] = None     # 到达时间
+    duration: Optional[str] = None         # 运行时长
+    seats: Optional[Dict[str, float]] = None  # 各席别票价
+    price: Optional[float] = None          # 参考票价
 
 
 class HotelData(BaseModel):
     """
-    酒店数据格式
+    酒店数据格式（高德 POI 归一化后）
     使用场景：调用酒店 API 后的数据解析
     """
-    hotel_name: str                       # 酒店名称
-    location: str                         # 位置/地址
-    price_per_night: Decimal              # 每晚价格
-    currency: str = "CNY"                 # 货币单位
-    rating: float = Field(..., ge=0, le=5)
-    # 评分，范围 0 ~ 5 星
-
-    amenities: List[str] = Field(default_factory=list)
-    # 设施列表，如 ["WiFi", "早餐", "泳池"]
-
-    image_url: Optional[str] = None       # 酒店图片链接
+    hotel_name: Optional[str] = None       # 酒店名称
+    address: Optional[str] = None          # 地址
+    location: Optional[str] = None         # 经纬度 "lng,lat"
+    district: Optional[str] = None         # 所在区县
+    price_per_night: Optional[float] = None  # 每晚价格（参考估值）
+    currency: str = "CNY"                  # 货币单位
+    rating: Optional[float] = Field(None, ge=0, le=5)  # 评分，范围 0 ~ 5 星
+    amenities: List[str] = Field(default_factory=list)  # 设施列表
+    photos: Optional[List[str]] = None     # 酒店图片链接
