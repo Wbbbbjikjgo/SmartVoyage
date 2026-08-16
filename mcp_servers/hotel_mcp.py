@@ -199,18 +199,25 @@ def _normalize_hotel_item(poi: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "hotel_name": poi.get("name", ""),
         "address": poi.get("address", ""),
-        "location": _format_location(poi),
         "district": poi.get("adname", ""),
         "city": poi.get("cityname", ""),
+        "location": _readable_location(poi),
+        "coords": _format_location(poi),
         "rating": rating,
         "tel": _split_tels(poi.get("tel")),
         "photos": photos,
         "price_per_night": estimated_price,
         "currency": "CNY",
-        "source": "amap",
         "amenities": _mock_amenities(),
+        "source": "amap",
         "note": "高德 POI 不含实时房价，价格为参考估值",
     }
+
+
+def _readable_location(poi: Dict[str, Any]) -> str:
+    """Compose a human-readable location string from city + district."""
+    parts = [poi.get("cityname", ""), poi.get("adname", "")]
+    return "".join(p for p in parts if p)
 
 
 def _format_location(poi: Dict[str, Any]) -> str:
