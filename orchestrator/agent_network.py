@@ -5,6 +5,7 @@ from typing import Dict, Any, List, Optional
 from agents import (
     WeatherAgent,
     FlightAgent,
+    TrainAgent,
     HotelAgent,
     ItineraryAgent,
     BaseAgent,
@@ -37,6 +38,13 @@ class AgentNetwork:
             "flight",
             FlightAgent(),
             f"http://localhost:{settings.flight_agent_port}",
+        )
+
+        # Train Agent
+        self.register_agent(
+            "train",
+            TrainAgent(),
+            f"http://localhost:{settings.train_agent_port}",
         )
 
         # Hotel Agent

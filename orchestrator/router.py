@@ -58,6 +58,7 @@ class AgentRouter:
         self.intent_to_agent: Dict[IntentType, str] = {
             IntentType.WEATHER_QUERY: "weather",        # 天气查询 → weather Agent
             IntentType.FLIGHT_BOOKING: "flight",        # 机票预订 → flight Agent
+            IntentType.TRAIN_BOOKING: "train",          # 高铁/火车票 → train Agent
             IntentType.HOTEL_BOOKING: "hotel",          # 酒店预订 → hotel Agent
             IntentType.ITINERARY_PLANNING: "itinerary", # 行程规划 → itinerary Agent
         }
@@ -73,6 +74,7 @@ class AgentRouter:
         self.intent_to_skill: Dict[IntentType, str] = {
             IntentType.WEATHER_QUERY: "get_current_weather",  # 天气查询 → 获取当前天气
             IntentType.FLIGHT_BOOKING: "search_flights",      # 机票预订 → 搜索航班
+            IntentType.TRAIN_BOOKING: "search_trains",        # 高铁/火车票 → 搜索车次
             IntentType.HOTEL_BOOKING: "search_hotels",        # 酒店预订 → 搜索酒店
             IntentType.ITINERARY_PLANNING: "create_itinerary", # 行程规划 → 创建行程
         }
@@ -104,6 +106,11 @@ class AgentRouter:
                 "destination": "arrival",
                 "guests": "passengers",
             },
+            # train Agent：departure → start, destination → end
+            "train": {
+                "departure": "start",
+                "destination": "end",
+            },
         }
 
         # ============================================================
@@ -120,6 +127,7 @@ class AgentRouter:
         self.skill_required_params: Dict[str, List[str]] = {
             "get_current_weather": ["location"],                              # 天气：需要位置
             "search_flights": ["departure", "arrival", "date", "passengers"], # 航班：出发地、目的地、日期、人数
+            "search_trains": ["start", "end", "date", "is_high_speed"],       # 火车票：出发、到达、日期、是否高铁
             "search_hotels": ["location", "check_in", "check_out", "guests"], # 酒店：位置、入住、退房、人数
             "create_itinerary": ["user_id", "destination", "start_date", "duration", "budget"],  # 行程：用户ID、目的地、开始日期、天数、预算
         }
@@ -185,6 +193,13 @@ class AgentRouter:
         if skill_name == "search_flights" and not params.get("date"):
             params["date"] = tomorrow
             params.setdefault("_defaults_used", []).append("date=明天")
+
+        # 技能：搜索高铁/火车票
+        if skill_name == "search_trains":
+            if not params.get("date"):
+                params["date"] = tomorrow
+                params.setdefault("_defaults_used", []).append("date=明天")
+            params.setdefault("is_high_speed", 0)
 
         # 技能：搜索酒店
         if skill_name == "search_hotels":
