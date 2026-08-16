@@ -1,209 +1,150 @@
-"""Hotel MCP tool server with mock data."""
+"""Hotel MCP tool server backed by the AMap (高德) POI search API.
+
+数据来源：高德开放平台「关键字搜索」接口
+- 接口地址：``/v3/place/text``（keywords=酒店）
+
+说明：高德 POI 返回酒店的名称/地址/评分/电话/图片等信息，但不提供
+实时房价，因此房价字段会以区间或近似值呈现，供行程规划参考。
+"""
 
 import logging
-from typing import Dict, Any, List
 import random
+from typing import Any, Dict, List, Optional
+
+import httpx
+
+from configs.settings import settings
+from mcp_servers.base import BaseMCPServer
+from mcp_servers.city_codes import city_to_adcode
 
 logger = logging.getLogger(__name__)
 
+_PLACE_ENDPOINT = "/v3/place/text"
 
-class HotelMCPServer:
-    """MCP server for hotel-related tools using mock data."""
 
-    def __init__(self):
-        """Initialize hotel MCP server."""
-        self.name = "Hotel Tools"
-        self.description = "酒店查询工具集（模拟数据）"
+class HotelMCPServer(BaseMCPServer):
+    """MCP server providing hotel search via AMap POI search."""
 
-        # Mock hotel chains
-        self.hotel_chains = [
-            "如家酒店", "汉庭酒店", "锦江之星", "7天连锁", "全季酒店",
-            "亚朵酒店", "桔子酒店", "希尔顿酒店", "万豪酒店", "洲际酒店",
-            "香格里拉酒店", "皇冠假日酒店", "假日酒店", "凯悦酒店",
-            "四季酒店", "华住美居", "维也纳酒店", "格林豪泰",
-        ]
+    name = "Hotel Tools"
+    description = "酒店查询工具集（高德开放平台）"
 
-        # Mock amenities
-        self.amenities_list = [
-            "免费WiFi", "停车场", "早餐", "健身房", "游泳池",
-            "SPA", "餐厅", "会议室", "洗衣服务", "叫醒服务",
-            "行李寄存", "前台24小时", "行政酒廊", "儿童乐园",
-            "接机服务", "咖啡厅", "商务中心", "无烟楼层",
-        ]
+    def __init__(self, mock_mode: Optional[bool] = None):
+        """Initialize the hotel MCP server.
 
-        # Hotel tags for richer display
-        self.hotel_tags = [
-            "近地铁", "商务首选", "亲子推荐", "网红打卡", "高性价比",
-            "新开张", "含双早", "免费取消", "近景点", "江景房",
-        ]
-
-        # Room types pool
-        self.room_types_pool = [
-            "标准间", "大床房", "双床房", "豪华大床房", "行政套房",
-            "家庭房", "亲子房", "景观房",
-        ]
-
-        # Mock city districts
-        self.city_districts = {
-            "北京": ["朝阳区", "海淀区", "东城区", "西城区", "丰台区", "通州区"],
-            "上海": ["浦东新区", "黄浦区", "静安区", "徐汇区", "长宁区", "虹口区"],
-            "广州": ["天河区", "越秀区", "海珠区", "荔湾区", "白云区", "番禺区"],
-            "深圳": ["福田区", "罗湖区", "南山区", "宝安区", "龙岗区", "龙华区"],
-            "成都": ["锦江区", "青羊区", "武侯区", "成华区", "高新区", "天府新区"],
-            "杭州": ["上城区", "拱墅区", "西湖区", "滨江区", "余杭区", "萧山区"],
-            "西安": ["雁塔区", "碑林区", "莲湖区", "未央区", "灞桥区", "长安区"],
-            "重庆": ["渝中区", "江北区", "南岸区", "沙坪坝区", "九龙坡区", "渝北区"],
-            "武汉": ["武昌区", "江汉区", "洪山区", "江岸区", "汉阳区", "硚口区"],
-            "南京": ["玄武区", "秦淮区", "建邺区", "鼓楼区", "栖霞区", "江宁区"],
-            "长沙": ["芙蓉区", "天心区", "岳麓区", "开福区", "雨花区", "望城区"],
-            "青岛": ["市南区", "市北区", "崂山区", "黄岛区", "李沧区", "城阳区"],
-            "厦门": ["思明区", "湖里区", "集美区", "海沧区", "同安区", "翔安区"],
-            "三亚": ["吉阳区", "天涯区", "海棠区", "崖州区"],
-            "昆明": ["五华区", "盘龙区", "官渡区", "西山区", "呈贡区"],
-            "大连": ["中山区", "西岗区", "沙河口区", "甘井子区", "旅顺口区"],
-        }
+        Args:
+            mock_mode: Override mock mode. Defaults to ``settings.hotel_mock_mode``.
+        """
+        super().__init__(
+            mock_mode=settings.hotel_mock_mode if mock_mode is None else mock_mode
+        )
+        self.api_key = settings.amap_api_key
+        self.base_url = settings.amap_base_url.rstrip("/")
 
     async def search_hotels(
         self,
         location: str,
-        check_in: str,
-        check_out: str,
+        check_in: str = "",
+        check_out: str = "",
         guests: int = 2,
         price_range: str = None,
+        limit: int = 15,
     ) -> Dict[str, Any]:
-        """
-        Search for available hotels.
+        """搜索指定城市的酒店。
 
         Args:
-            location: City name
-            check_in: Check-in date (YYYY-MM-DD)
-            check_out: Check-out date (YYYY-MM-DD)
-            guests: Number of guests
-            price_range: Price range (e.g., "200-500")
+            location: 城市名称（如 "北京"）。
+            check_in: 入住日期（YYYY-MM-DD，高德不参与价格计算，仅回显）。
+            check_out: 退房日期（同上）。
+            guests: 入住人数（回显）。
+            price_range: 价格范围（如 "200-500"，仅用于模拟数据）。
+            limit: 返回酒店数量上限。
 
         Returns:
-            List of available hotels
+            归一化后的酒店搜索结果。
         """
+        if self.mock_mode:
+            return _mock_search_hotels(location, check_in, check_out, guests, price_range)
+
         try:
-            # Get districts for the city
-            districts = self.city_districts.get(location, ["市中心"])
-
-            # Generate mock hotels (12-16 hotels for richer results)
-            num_hotels = random.randint(12, 16)
-            hotels = []
-
-            for i in range(num_hotels):
-                chain = random.choice(self.hotel_chains)
-                district = random.choice(districts)
-                hotel_name = f"{chain}({location}{district}店)"
-
-                # Price: 150-1800 CNY per night
-                if price_range:
-                    min_price, max_price = map(int, price_range.split("-"))
-                    price = random.randint(min_price, max_price)
-                else:
-                    price = random.randint(15, 180) * 10
-
-                # Rating: 3.5-5.0
-                rating = round(random.uniform(3.5, 5.0), 1)
-
-                # Random amenities (4-9 items)
-                num_amenities = random.randint(4, 9)
-                amenities = random.sample(self.amenities_list, num_amenities)
-
-                # Random room types (2-5)
-                room_types = random.sample(self.room_types_pool, random.randint(2, 5))
-
-                hotels.append({
-                    "hotel_name": hotel_name,
-                    "location": f"{location} {district}",
-                    "address": f"{district}某某路{random.randint(1, 999)}号",
-                    "price_per_night": price,
-                    "currency": "CNY",
-                    "rating": rating,
-                    "review_count": random.randint(100, 8000),
-                    "tags": random.sample(self.hotel_tags, random.randint(1, 3)),
-                    "breakfast": random.choice(["含双早", "含单早", "不含早"]),
-                    "distance_desc": f"距市中心{round(random.uniform(0.5, 15), 1)}公里",
-                    "amenities": amenities,
-                    "room_types": room_types,
-                    "available_rooms": random.randint(2, 50),
-                })
-
-            # Sort by rating (descending)
-            hotels.sort(key=lambda x: x["rating"], reverse=True)
-
-            return {
-                "location": location,
-                "check_in": check_in,
-                "check_out": check_out,
-                "guests": guests,
-                "hotels": hotels,
-                "total": len(hotels),
-            }
-
-        except Exception as e:
-            logger.exception(f"Error searching hotels: {e}")
-            return {"error": True, "message": str(e)}
-
-    async def get_hotel_detail(self, hotel_name: str, date: str) -> Dict[str, Any]:
-        """
-        Get detailed information for a specific hotel.
-
-        Args:
-            hotel_name: Hotel name
-            date: Check-in date
-
-        Returns:
-            Hotel detail dictionary
-        """
-        try:
-            # Mock hotel detail
-            return {
-                "hotel_name": hotel_name,
-                "description": "这是一家舒适的酒店，提供优质的住宿体验。",
-                "address": "某某路123号",
-                "phone": "010-12345678",
-                "check_in_time": "14:00",
-                "check_out_time": "12:00",
-                "room_types": [
-                    {
-                        "type": "标准间",
-                        "price": 399,
-                        "bed": "双床",
-                        "area": "25㎡",
-                        "breakfast": "不含早",
-                    },
-                    {
-                        "type": "大床房",
-                        "price": 459,
-                        "bed": "大床",
-                        "area": "28㎡",
-                        "breakfast": "含单早",
-                    },
-                    {
-                        "type": "豪华套房",
-                        "price": 899,
-                        "bed": "大床",
-                        "area": "45㎡",
-                        "breakfast": "含双早",
-                    },
-                ],
-                "amenities": self.amenities_list[:8],
-                "policies": {
-                    "cancellation": "入住前24小时可免费取消",
-                    "children": "12岁以下儿童免费加床",
-                    "pets": "不允许携带宠物",
+            data = await self.get_json(
+                f"{self.base_url}{_PLACE_ENDPOINT}",
+                params={
+                    "key": self.api_key,
+                    "keywords": "酒店",
+                    "city": location,
+                    "offset": str(min(max(limit, 1), 25)),
+                    "page": "1",
+                    "extensions": "all",
                 },
-                "date": date,
-            }
+            )
+        except httpx.HTTPError as exc:
+            logger.warning("酒店接口调用失败，降级为模拟数据: %s", exc)
+            return _mock_search_hotels(location, check_in, check_out, guests, price_range)
 
-        except Exception as e:
-            logger.exception(f"Error getting hotel detail: {e}")
-            return {"error": True, "message": str(e)}
+        return self._normalize_hotels(location, check_in, check_out, guests, data)
+
+    async def get_hotel_detail(
+        self, hotel_name: str, city: str = "", date: str = ""
+    ) -> Dict[str, Any]:
+        """获取指定酒店的详细信息。
+
+        Args:
+            hotel_name: 酒店名称。
+            city: 所在城市（可选，用于缩小搜索范围）。
+            date: 入住日期（可选）。
+
+        Returns:
+            酒店详情数据。
+        """
+        if self.mock_mode:
+            return _mock_hotel_detail(hotel_name, date)
+
+        try:
+            data = await self.get_json(
+                f"{self.base_url}{_PLACE_ENDPOINT}",
+                params={
+                    "key": self.api_key,
+                    "keywords": hotel_name,
+                    "city": city,
+                    "offset": "1",
+                    "page": "1",
+                    "extensions": "all",
+                },
+            )
+        except httpx.HTTPError as exc:
+            logger.warning("酒店详情接口调用失败: %s", exc)
+            return self.error(f"酒店详情查询失败: {exc}")
+
+        result = self._normalize_hotels(city, date, date, 1, data)
+        hotels = result.get("hotels", [])
+        if hotels:
+            return hotels[0]
+        return self.error(f"未查询到酒店「{hotel_name}」的详情")
+
+    def _normalize_hotels(
+        self,
+        location: str,
+        check_in: str,
+        check_out: str,
+        guests: int,
+        data: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Normalize the AMap POI response into the internal hotel schema."""
+        pois = data.get("pois") or []
+        hotels = [_normalize_hotel_item(poi) for poi in pois]
+
+        return {
+            "location": location,
+            "check_in": check_in,
+            "check_out": check_out,
+            "guests": guests,
+            "hotels": hotels,
+            "total": len(hotels),
+            "source": "amap",
+        }
 
     def get_tools(self) -> list:
-        """Get list of available tools."""
+        """Get list of available tools (MCP schema)."""
         return [
             {
                 "name": "search_hotels",
@@ -211,29 +152,12 @@ class HotelMCPServer:
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "location": {
-                            "type": "string",
-                            "description": "城市名称（如：北京）",
-                        },
-                        "check_in": {
-                            "type": "string",
-                            "description": "入住日期（YYYY-MM-DD）",
-                        },
-                        "check_out": {
-                            "type": "string",
-                            "description": "退房日期（YYYY-MM-DD）",
-                        },
-                        "guests": {
-                            "type": "integer",
-                            "description": "入住人数",
-                            "default": 2,
-                        },
-                        "price_range": {
-                            "type": "string",
-                            "description": "价格范围（如：200-500）",
-                        },
+                        "location": {"type": "string", "description": "城市名称"},
+                        "check_in": {"type": "string", "description": "入住日期（YYYY-MM-DD）"},
+                        "check_out": {"type": "string", "description": "退房日期（YYYY-MM-DD）"},
+                        "guests": {"type": "integer", "description": "入住人数", "default": 2},
                     },
-                    "required": ["location", "check_in", "check_out"],
+                    "required": ["location"],
                 },
             },
             {
@@ -242,19 +166,152 @@ class HotelMCPServer:
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "hotel_name": {
-                            "type": "string",
-                            "description": "酒店名称",
-                        },
-                        "date": {
-                            "type": "string",
-                            "description": "入住日期",
-                        },
+                        "hotel_name": {"type": "string", "description": "酒店名称"},
+                        "city": {"type": "string", "description": "所在城市"},
                     },
-                    "required": ["hotel_name", "date"],
+                    "required": ["hotel_name"],
                 },
             },
         ]
+
+
+# ================================================================
+# Normalization helpers
+# ================================================================
+
+def _normalize_hotel_item(poi: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize a single AMap POI into the internal hotel schema."""
+    if not isinstance(poi, dict):
+        return poi
+
+    biz_ext = poi.get("biz_ext") or {}
+    rating = biz_ext.get("rating") or poi.get("rating")
+    try:
+        rating = float(rating) if rating else None
+    except (TypeError, ValueError):
+        rating = None
+
+    photos = [p.get("url") for p in (poi.get("photos") or []) if isinstance(p, dict) and p.get("url")]
+
+    # 高德不提供实时房价，用评分近似生成一个参考价位区间，供演示展示
+    estimated_price = _estimate_price(rating)
+
+    return {
+        "hotel_name": poi.get("name", ""),
+        "address": poi.get("address", ""),
+        "location": _format_location(poi),
+        "district": poi.get("adname", ""),
+        "city": poi.get("cityname", ""),
+        "rating": rating,
+        "tel": _split_tels(poi.get("tel")),
+        "photos": photos,
+        "price_per_night": estimated_price,
+        "currency": "CNY",
+        "source": "amap",
+        "amenities": _mock_amenities(),
+        "note": "高德 POI 不含实时房价，价格为参考估值",
+    }
+
+
+def _format_location(poi: Dict[str, Any]) -> str:
+    """Format POI coordinates as 'lng,lat'."""
+    loc = poi.get("location")
+    if isinstance(loc, str) and loc:
+        return loc
+    if isinstance(loc, (list, tuple)) and len(loc) == 2:
+        return f"{loc[0]},{loc[1]}"
+    return ""
+
+
+def _split_tels(tel: Any) -> List[str]:
+    """Split a semicolon-joined telephone string into a list."""
+    if not tel:
+        return []
+    if isinstance(tel, str):
+        return [t.strip() for t in tel.split(";") if t.strip()]
+    if isinstance(tel, list):
+        return [str(t) for t in tel]
+    return [str(tel)]
+
+
+def _estimate_price(rating: Optional[float]) -> int:
+    """Estimate a reference price band from a hotel rating."""
+    base = 300 if rating is None else int(rating * 100)
+    return base + random.randint(0, 200)
+
+
+_AMENITIES_POOL = [
+    "免费WiFi", "停车场", "早餐", "健身房", "餐厅", "前台24小时",
+    "行李寄存", "接机服务", "商务中心", "洗衣服务",
+]
+
+
+def _mock_amenities() -> List[str]:
+    """Return a random subset of amenities for display."""
+    return random.sample(_AMENITIES_POOL, random.randint(3, 6))
+
+
+# ================================================================
+# Mock data generators
+# ================================================================
+
+def _mock_search_hotels(
+    location: str,
+    check_in: str,
+    check_out: str,
+    guests: int,
+    price_range: str,
+) -> Dict[str, Any]:
+    """Generate rich mock hotel search results."""
+    chains = ["如家酒店", "汉庭酒店", "全季酒店", "亚朵酒店", "希尔顿酒店", "洲际酒店"]
+    num_hotels = random.randint(10, 14)
+    hotels = []
+    for _ in range(num_hotels):
+        rating = round(random.uniform(3.5, 5.0), 1)
+        if price_range:
+            try:
+                low, high = map(int, price_range.split("-"))
+                price = random.randint(low, high)
+            except ValueError:
+                price = random.randint(200, 1200)
+        else:
+            price = random.randint(200, 1500)
+        hotels.append({
+            "hotel_name": f"{random.choice(chains)}({location}店)",
+            "address": f"{location}市某街道{random.randint(1, 999)}号",
+            "district": "市中心",
+            "city": location,
+            "rating": rating,
+            "price_per_night": price,
+            "currency": "CNY",
+            "amenities": _mock_amenities(),
+            "source": "mock",
+        })
+    hotels.sort(key=lambda x: x["rating"], reverse=True)
+    return {
+        "location": location,
+        "check_in": check_in,
+        "check_out": check_out,
+        "guests": guests,
+        "hotels": hotels,
+        "total": len(hotels),
+        "source": "mock",
+    }
+
+
+def _mock_hotel_detail(hotel_name: str, date: str) -> Dict[str, Any]:
+    """Generate mock hotel detail."""
+    return {
+        "hotel_name": hotel_name,
+        "address": "某街道123号",
+        "rating": round(random.uniform(3.5, 5.0), 1),
+        "tel": ["010-12345678"],
+        "amenities": _mock_amenities(),
+        "price_per_night": random.randint(200, 1500),
+        "currency": "CNY",
+        "date": date,
+        "source": "mock",
+    }
 
 
 # Global instance
