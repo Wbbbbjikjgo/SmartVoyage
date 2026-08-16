@@ -4,7 +4,7 @@ import json
 import logging
 from typing import Dict, Any, Optional
 from langchain_openai import ChatOpenAI
-from langchain.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate
 from configs.settings import settings
 from models.schemas import IntentType, IntentResult
 
@@ -18,8 +18,8 @@ class IntentRecognizer:
         """Initialize intent recognizer with LLM."""
         self.llm = ChatOpenAI(
             model=settings.openai_model,
-            openai_api_key=settings.openai_api_key,
-            openai_api_base=settings.openai_base_url,
+            api_key=settings.openai_api_key,
+            base_url=settings.openai_base_url,
             temperature=0.1,
         )
 
