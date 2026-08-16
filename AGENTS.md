@@ -154,9 +154,12 @@ git commit -m "test: add end-to-end integration tests"
 | `OPENAI_API_KEY` | DeepSeek LLM | DeepSeek 开放平台 |
 | `OPENAI_BASE_URL` | DeepSeek API 地址 | `https://api.deepseek.com` |
 | `OPENAI_MODEL` | 模型名 | `deepseek-chat` |
-| `QWEATHER_API_KEY` | 天气查询 | 和风天气 |
+| `AMAP_API_KEY` | 天气查询 + 酒店搜索 + 地理编码 | 高德开放平台 |
+| `ALIYUN_APPCODE` | 航班查询 + 火车票查询 | 阿里云 API 市场 |
 | `MYSQL_*` | 本地 MySQL | 本地安装 |
 | `REDIS_URL` | 本地 Redis | 本地安装 |
+
+> 航班/火车票为付费接口，免费额度极少，默认 `FLIGHT_MOCK_MODE` / `TRAIN_MOCK_MODE` 为 `true` 保护额度。
 
 ### 5.2 端口规划
 
@@ -165,12 +168,14 @@ git commit -m "test: add end-to-end integration tests"
 | FastAPI 网关 | 8000 | API 入口 |
 | Weather Agent | 5001 | A2A 服务 |
 | Flight Agent | 5002 | A2A 服务 |
+| Train Agent | 5005 | A2A 服务 |
 | Hotel Agent | 5003 | A2A 服务 |
 | Itinerary Agent | 5004 | A2A 服务 |
 | weather_mcp | 5010 | MCP 工具 |
 | flight_mcp | 5011 | MCP 工具 |
 | hotel_mcp | 5012 | MCP 工具 |
 | db_mcp | 5013 | MCP 工具 |
+| train_mcp | 5014 | MCP 工具 |
 | Streamlit | 8501 | 前端 |
 | MySQL | 3306 | 本地 |
 | Redis | 6379 | 本地 |
@@ -239,12 +244,12 @@ pytest tests/ -v
 
 **A**: DeepSeek 兼容 OpenAI 格式，使用 `langchain_openai.ChatOpenAI` 时设置 `base_url` 即可。
 
-### Q3: 和风天气 API 返回结构？
+### Q3: 高德天气 API 返回结构？
 
-**A**: 参考官方文档 https://dev.qweather.com/docs/api/，主要接口：
-- 实时天气：`/v7/weather/now`
-- 天气预报：`/v7/weather/3d`
-- 空气质量：`/v7/air/now`
+**A**: 参考官方文档 https://lbs.amap.com/api/webservice/guide/api/weatherinfo，主要参数：
+- `city`：adcode（行政区划编码），项目已内置城市→adcode 映射
+- `extensions=base`：实况天气（返回 `lives`）
+- `extensions=all`：天气预报（返回 `forecasts[].casts`，最多 4 天）
 
 ---
 
