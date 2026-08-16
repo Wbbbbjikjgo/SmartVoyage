@@ -272,6 +272,84 @@ class DatabaseMCPServer:
             logger.exception(f"Error getting bookings: {e}")
             return {"error": True, "message": str(e)}
 
+    async def update_itinerary_status(
+        self, itinerary_id: int, status: str
+    ) -> Dict[str, Any]:
+        """
+        Update the status of an itinerary.
+
+        Args:
+            itinerary_id: Itinerary ID
+            status: New status (draft/confirmed/cancelled)
+
+        Returns:
+            Updated itinerary data
+        """
+        valid_status = {"draft", "confirmed", "cancelled"}
+        if status not in valid_status:
+            return {"error": True, "message": f"非法状态: {status}"}
+
+        try:
+            session = self._get_session()
+            try:
+                itinerary = (
+                    session.query(Itinerary)
+                    .filter(Itinerary.itinerary_id == itinerary_id)
+                    .first()
+                )
+                if not itinerary:
+                    return {"error": True, "message": f"Itinerary not found: {itinerary_id}"}
+
+                itinerary.status = status
+                session.commit()
+
+                return {
+                    "itinerary_id": itinerary.itinerary_id,
+                    "status": itinerary.status,
+                    "updated_at": itinerary.updated_at.isoformat(),
+                }
+            finally:
+                session.close()
+
+        except Exception as e:
+            logger.exception(f"Error updating itinerary status: {e}")
+            return {"error": True, "message": str(e)}
+
+    async def cancel_booking(self, booking_id: int) -> Dict[str, Any]:
+        """
+        Cancel a booking.
+
+        Args:
+            booking_id: Booking ID
+
+        Returns:
+            Cancelled booking data
+        """
+        try:
+            session = self._get_session()
+            try:
+                booking = (
+                    session.query(Booking)
+                    .filter(Booking.booking_id == booking_id)
+                    .first()
+                )
+                if not booking:
+                    return {"error": True, "message": f"Booking not found: {booking_id}"}
+
+                booking.status = "cancelled"
+                session.commit()
+
+                return {
+                    "booking_id": booking.booking_id,
+                    "status": booking.status,
+                }
+            finally:
+                session.close()
+
+        except Exception as e:
+            logger.exception(f"Error cancelling booking: {e}")
+            return {"error": True, "message": str(e)}
+
     def get_tools(self) -> list:
         """Get list of available tools."""
         return [
@@ -365,6 +443,29 @@ class DatabaseMCPServer:
                         },
                     },
                     "required": ["itinerary_id"],
+                },
+            },
+            {
+                "name": "update_itinerary_status",
+                "description": "更新行程状态",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "itinerary_id": {"type": "integer", "description": "行程ID"},
+                        "status": {"type": "string", "description": "状态（draft/confirmed/cancelled）"},
+                    },
+                    "required": ["itinerary_id", "status"],
+                },
+            },
+            {
+                "name": "cancel_booking",
+                "description": "取消预订",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "booking_id": {"type": "integer", "description": "预订ID"},
+                    },
+                    "required": ["booking_id"],
                 },
             },
         ]

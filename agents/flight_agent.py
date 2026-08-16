@@ -1,7 +1,7 @@
 """Flight Agent - handles flight-related queries."""
 
 import logging
-from typing import Dict, Any
+from typing import Any, Dict, Optional
 from .base_agent import BaseAgent, AgentCard, Skill
 from mcp_servers.flight_mcp import flight_mcp
 
@@ -9,22 +9,21 @@ logger = logging.getLogger(__name__)
 
 
 class FlightAgent(BaseAgent):
-    """Agent for flight queries using mock data."""
+    """Agent for flight queries backed by the Aliyun API Market."""
 
     def __init__(self):
         """Initialize flight agent."""
         super().__init__(
             name="Flight Agent",
-            description="提供航班查询和机票预订服务，支持搜索航班和获取航班详情",
-            version="1.0.0",
+            description="提供航班搜索与航班详情查询（数据来源：阿里云 API 市场）",
+            version="2.0.0",
         )
 
-        # Register skills
         self.register_skill(
             Skill(
                 name="search_flights",
                 description="搜索可用航班",
-                tags=["flight", "booking"],
+                tags=["flight", "search"],
             )
         )
         self.register_skill(
@@ -65,36 +64,17 @@ class FlightAgent(BaseAgent):
         arrival: str,
         date: str,
         passengers: int = 1,
+        max_segments: Optional[int] = None,
     ) -> Dict[str, Any]:
-        """
-        Search for available flights.
-
-        Args:
-            departure: Departure city
-            arrival: Arrival city
-            date: Travel date
-            passengers: Number of passengers
-
-        Returns:
-            Flight search results
-        """
-        return await flight_mcp.search_flights(departure, arrival, date, passengers)
+        """搜索可用航班。"""
+        return await flight_mcp.search_flights(
+            departure, arrival, date, passengers, max_segments
+        )
 
     async def skill_get_flight_detail(
-        self,
-        flight_no: str,
-        date: str,
+        self, flight_no: str, date: str
     ) -> Dict[str, Any]:
-        """
-        Get flight detail.
-
-        Args:
-            flight_no: Flight number
-            date: Flight date
-
-        Returns:
-            Flight detail
-        """
+        """获取航班详细信息。"""
         return await flight_mcp.get_flight_detail(flight_no, date)
 
 

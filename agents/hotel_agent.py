@@ -1,7 +1,7 @@
 """Hotel Agent - handles hotel-related queries."""
 
 import logging
-from typing import Dict, Any
+from typing import Any, Dict, Optional
 from .base_agent import BaseAgent, AgentCard, Skill
 from mcp_servers.hotel_mcp import hotel_mcp
 
@@ -9,22 +9,21 @@ logger = logging.getLogger(__name__)
 
 
 class HotelAgent(BaseAgent):
-    """Agent for hotel queries using mock data."""
+    """Agent for hotel queries backed by the AMap POI search."""
 
     def __init__(self):
         """Initialize hotel agent."""
         super().__init__(
             name="Hotel Agent",
-            description="提供酒店查询和预订服务，支持搜索酒店和获取酒店详情",
-            version="1.0.0",
+            description="提供酒店搜索与酒店详情查询（数据来源：高德开放平台）",
+            version="2.0.0",
         )
 
-        # Register skills
         self.register_skill(
             Skill(
                 name="search_hotels",
                 description="搜索可用酒店",
-                tags=["hotel", "booking"],
+                tags=["hotel", "search"],
             )
         )
         self.register_skill(
@@ -62,42 +61,18 @@ class HotelAgent(BaseAgent):
     async def skill_search_hotels(
         self,
         location: str,
-        check_in: str,
-        check_out: str,
+        check_in: str = "",
+        check_out: str = "",
         guests: int = 2,
-        price_range: str = None,
     ) -> Dict[str, Any]:
-        """
-        Search for available hotels.
-
-        Args:
-            location: City name
-            check_in: Check-in date
-            check_out: Check-out date
-            guests: Number of guests
-            price_range: Price range
-
-        Returns:
-            Hotel search results
-        """
-        return await hotel_mcp.search_hotels(location, check_in, check_out, guests, price_range)
+        """搜索可用酒店。"""
+        return await hotel_mcp.search_hotels(location, check_in, check_out, guests)
 
     async def skill_get_hotel_detail(
-        self,
-        hotel_name: str,
-        date: str,
+        self, hotel_name: str, city: str = "", date: str = ""
     ) -> Dict[str, Any]:
-        """
-        Get hotel detail.
-
-        Args:
-            hotel_name: Hotel name
-            date: Check-in date
-
-        Returns:
-            Hotel detail
-        """
-        return await hotel_mcp.get_hotel_detail(hotel_name, date)
+        """获取酒店详细信息。"""
+        return await hotel_mcp.get_hotel_detail(hotel_name, city, date)
 
 
 # Global instance

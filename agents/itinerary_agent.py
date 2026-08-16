@@ -1,7 +1,7 @@
-"""Itinerary Agent - handles itinerary planning."""
+"""Itinerary Agent - handles itinerary planning and management."""
 
 import logging
-from typing import Dict, Any, List
+from typing import Any, Dict, List
 from .base_agent import BaseAgent, AgentCard, Skill
 from mcp_servers.db_mcp import db_mcp
 
@@ -9,44 +9,33 @@ logger = logging.getLogger(__name__)
 
 
 class ItineraryAgent(BaseAgent):
-    """Agent for itinerary planning and management."""
+    """Agent for itinerary planning and lifecycle management."""
 
     def __init__(self):
         """Initialize itinerary agent."""
         super().__init__(
             name="Itinerary Agent",
-            description="提供行程规划服务，支持创建、查询和管理行程",
-            version="1.0.0",
+            description="提供行程创建、查询、更新、取消等全生命周期管理服务",
+            version="2.0.0",
         )
 
-        # Register skills
         self.register_skill(
-            Skill(
-                name="create_itinerary",
-                description="创建新行程",
-                tags=["itinerary", "planning"],
-            )
+            Skill(name="create_itinerary", description="创建新行程", tags=["itinerary", "planning"])
         )
         self.register_skill(
-            Skill(
-                name="get_user_itineraries",
-                description="获取用户的所有行程",
-                tags=["itinerary", "list"],
-            )
+            Skill(name="get_user_itineraries", description="获取用户的所有行程", tags=["itinerary", "list"])
         )
         self.register_skill(
-            Skill(
-                name="add_booking",
-                description="为行程添加预订",
-                tags=["itinerary", "booking"],
-            )
+            Skill(name="get_itinerary_detail", description="获取行程详情及预订", tags=["itinerary", "detail"])
         )
         self.register_skill(
-            Skill(
-                name="get_itinerary_detail",
-                description="获取行程详情",
-                tags=["itinerary", "detail"],
-            )
+            Skill(name="add_booking", description="为行程添加预订", tags=["itinerary", "booking"])
+        )
+        self.register_skill(
+            Skill(name="update_itinerary_status", description="更新行程状态", tags=["itinerary", "status"])
+        )
+        self.register_skill(
+            Skill(name="cancel_booking", description="取消预订", tags=["itinerary", "booking"])
         )
 
     def get_agent_card(self, base_url: str) -> AgentCard:
@@ -81,19 +70,7 @@ class ItineraryAgent(BaseAgent):
         duration: int,
         budget: float = None,
     ) -> Dict[str, Any]:
-        """
-        Create a new itinerary.
-
-        Args:
-            user_id: User ID
-            destination: Destination city
-            start_date: Start date
-            duration: Duration in days
-            budget: Budget amount
-
-        Returns:
-            Created itinerary data
-        """
+        """创建新行程。"""
         return await db_mcp.create_itinerary(
             user_id=user_id,
             destination=destination,
@@ -103,49 +80,12 @@ class ItineraryAgent(BaseAgent):
         )
 
     async def skill_get_user_itineraries(self, user_id: int) -> Dict[str, Any]:
-        """
-        Get all itineraries for a user.
-
-        Args:
-            user_id: User ID
-
-        Returns:
-            List of itineraries
-        """
+        """获取用户的所有行程。"""
         return await db_mcp.get_user_itineraries(user_id)
 
-    async def skill_add_booking(
-        self,
-        itinerary_id: int,
-        booking_type: str,
-        details: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        """
-        Add a booking to an itinerary.
-
-        Args:
-            itinerary_id: Itinerary ID
-            booking_type: Booking type (flight/hotel/ticket)
-            details: Booking details
-
-        Returns:
-            Created booking data
-        """
-        return await db_mcp.create_booking(itinerary_id, booking_type, details)
-
     async def skill_get_itinerary_detail(self, itinerary_id: int) -> Dict[str, Any]:
-        """
-        Get itinerary detail with all bookings.
-
-        Args:
-            itinerary_id: Itinerary ID
-
-        Returns:
-            Itinerary detail with bookings
-        """
-        # Get bookings for the itinerary
+        """获取行程详情（含所有预订）。"""
         bookings_result = await db_mcp.get_itinerary_bookings(itinerary_id)
-
         if bookings_result.get("error"):
             return bookings_result
 
@@ -154,6 +94,25 @@ class ItineraryAgent(BaseAgent):
             "bookings": bookings_result.get("bookings", []),
             "total_bookings": bookings_result.get("total", 0),
         }
+
+    async def skill_add_booking(
+        self,
+        itinerary_id: int,
+        booking_type: str,
+        details: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """为行程添加预订。"""
+        return await db_mcp.create_booking(itinerary_id, booking_type, details)
+
+    async def skill_update_itinerary_status(
+        self, itinerary_id: int, status: str
+    ) -> Dict[str, Any]:
+        """更新行程状态（draft/confirmed/cancelled）。"""
+        return await db_mcp.update_itinerary_status(itinerary_id, status)
+
+    async def skill_cancel_booking(self, booking_id: int) -> Dict[str, Any]:
+        """取消预订。"""
+        return await db_mcp.cancel_booking(booking_id)
 
     async def plan_itinerary(
         self,
@@ -178,9 +137,8 @@ class ItineraryAgent(BaseAgent):
             hotel_data: Hotel search results
 
         Returns:
-            Planned itinerary
+            Planned itinerary detail
         """
-        # Create the itinerary
         itinerary_result = await self.skill_create_itinerary(
             user_id=user_id,
             destination=destination,
@@ -193,44 +151,39 @@ class ItineraryAgent(BaseAgent):
 
         itinerary_id = itinerary_result["itinerary_id"]
 
-        # Add flight bookings if available
         if flight_data and not flight_data.get("error"):
             flights = flight_data.get("flights", [])
             if flights:
-                # Book the first flight (or let user choose)
                 selected_flight = flights[0]
                 await self.skill_add_booking(
                     itinerary_id=itinerary_id,
                     booking_type="flight",
                     details={
-                        "flight_no": selected_flight["flight_no"],
-                        "airline": selected_flight["airline"],
-                        "departure": selected_flight["departure"],
-                        "arrival": selected_flight["arrival"],
-                        "departure_time": selected_flight["departure_time"],
-                        "arrival_time": selected_flight["arrival_time"],
-                        "price": selected_flight["price"],
+                        "flight_no": selected_flight.get("flight_no"),
+                        "airline": selected_flight.get("airline"),
+                        "departure": selected_flight.get("departure"),
+                        "arrival": selected_flight.get("arrival"),
+                        "departure_time": selected_flight.get("departure_time"),
+                        "arrival_time": selected_flight.get("arrival_time"),
+                        "price": selected_flight.get("price"),
                     },
                 )
 
-        # Add hotel bookings if available
         if hotel_data and not hotel_data.get("error"):
             hotels = hotel_data.get("hotels", [])
             if hotels:
-                # Book the first hotel (or let user choose)
                 selected_hotel = hotels[0]
                 await self.skill_add_booking(
                     itinerary_id=itinerary_id,
                     booking_type="hotel",
                     details={
-                        "hotel_name": selected_hotel["hotel_name"],
-                        "location": selected_hotel["location"],
-                        "price_per_night": selected_hotel["price_per_night"],
-                        "rating": selected_hotel["rating"],
+                        "hotel_name": selected_hotel.get("hotel_name"),
+                        "location": selected_hotel.get("district") or selected_hotel.get("city"),
+                        "price_per_night": selected_hotel.get("price_per_night"),
+                        "rating": selected_hotel.get("rating"),
                     },
                 )
 
-        # Return the complete itinerary
         return await self.skill_get_itinerary_detail(itinerary_id)
 
 

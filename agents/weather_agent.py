@@ -9,36 +9,28 @@ logger = logging.getLogger(__name__)
 
 
 class WeatherAgent(BaseAgent):
-    """Agent for weather queries using QWeather API."""
+    """Agent for weather queries backed by the AMap (高德) weather API."""
 
     def __init__(self):
         """Initialize weather agent."""
         super().__init__(
             name="Weather Agent",
-            description="提供全球各地的实时天气信息和预报，支持按城市和日期查询",
-            version="1.0.0",
+            description="提供城市实况天气与天气预报查询（数据来源：高德开放平台）",
+            version="2.0.0",
         )
 
-        # Register skills
         self.register_skill(
             Skill(
                 name="get_current_weather",
-                description="获取指定城市的当前天气",
-                tags=["weather", "forecast"],
+                description="获取指定城市的实况天气",
+                tags=["weather", "current"],
             )
         )
         self.register_skill(
             Skill(
                 name="get_forecast",
-                description="获取指定城市的天气预报",
+                description="获取指定城市的天气预报（未来最多4天）",
                 tags=["weather", "forecast"],
-            )
-        )
-        self.register_skill(
-            Skill(
-                name="get_air_quality",
-                description="获取指定城市的空气质量数据",
-                tags=["weather", "air_quality"],
             )
         )
 
@@ -57,15 +49,7 @@ class WeatherAgent(BaseAgent):
         )
 
     async def handle_task(self, task: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Handle incoming task request.
-
-        Args:
-            task: Task request with 'skill' and 'parameters'
-
-        Returns:
-            Task result
-        """
+        """Handle incoming task request."""
         skill_name = task.get("skill")
         parameters = task.get("parameters", {})
 
@@ -75,45 +59,14 @@ class WeatherAgent(BaseAgent):
         return await self.execute_skill(skill_name, parameters)
 
     async def skill_get_current_weather(self, location: str) -> Dict[str, Any]:
-        """
-        Get current weather for a location.
-
-        Args:
-            location: City name
-
-        Returns:
-            Weather data
-        """
+        """获取指定城市的实况天气。"""
         return await weather_mcp.get_current_weather(location)
 
     async def skill_get_forecast(
-        self,
-        location: str,
-        days: int = 3,
+        self, location: str, days: int = 3
     ) -> Dict[str, Any]:
-        """
-        Get weather forecast.
-
-        Args:
-            location: City name
-            days: Number of forecast days
-
-        Returns:
-            Forecast data
-        """
+        """获取指定城市的天气预报。"""
         return await weather_mcp.get_forecast(location, days)
-
-    async def skill_get_air_quality(self, location: str) -> Dict[str, Any]:
-        """
-        Get air quality data.
-
-        Args:
-            location: City name
-
-        Returns:
-            Air quality data
-        """
-        return await weather_mcp.get_air_quality(location)
 
 
 # Global instance
