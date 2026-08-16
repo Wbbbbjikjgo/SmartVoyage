@@ -145,6 +145,15 @@ async def chat(request: ChatRequest) -> ChatResponse:
                     total = flight_data.get("total", 0)
                     message = f"为您找到 {total} 个航班。"
 
+            # 高铁/火车票 Agent
+            elif agent_name == "train":
+                train_data = data.get("data", {})
+                if train_data.get("error"):
+                    message = f"抱歉，查询火车票时出错：{train_data.get('message')}"
+                else:
+                    total = train_data.get("total", 0)
+                    message = f"为您找到 {total} 趟车次。"
+
             # 酒店 Agent
             elif agent_name == "hotel":
                 hotel_data = data.get("data", {})

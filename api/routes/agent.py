@@ -84,6 +84,11 @@ async def gateway_agent_card() -> Dict[str, Any]:
                 "tags": ["flight", "booking"],
             },
             {
+                "name": "train_booking",
+                "description": "查询高铁/火车票",
+                "tags": ["train", "booking"],
+            },
+            {
                 "name": "hotel_booking",
                 "description": "查询和预订酒店",
                 "tags": ["hotel", "booking"],

@@ -80,29 +80,17 @@ def display_weather_card(weather_data: Dict[str, Any]):
 
     with col3:
         st.metric(
-            label="💨 风速",
-            value=f"{weather_data.get('wind_speed', 'N/A')} km/h",
+            label="💨 风力",
+            value=f"{weather_data.get('wind_power', 'N/A')}",
         )
 
     st.info(f"**{weather_data.get('location', '')}** - {weather_data.get('description', '')}")
 
     details = []
-    if "feels_like" in weather_data:
-        details.append(f"体感 {weather_data['feels_like']}°C")
-    if "wind_direction" in weather_data:
-        details.append(f"{weather_data['wind_direction']}")
-    if "wind_scale" in weather_data:
-        details.append(f"{weather_data['wind_scale']}级")
-    if "pressure" in weather_data:
-        details.append(f"气压 {weather_data['pressure']}hPa")
-    if "visibility" in weather_data:
-        details.append(f"能见度 {weather_data['visibility']}km")
-    if "precipitation" in weather_data:
-        details.append(f"降水 {weather_data['precipitation']}mm")
-    if "uv_index" in weather_data:
-        details.append(f"紫外线 {weather_data['uv_index']}")
-    if "cloud" in weather_data:
-        details.append(f"云量 {weather_data['cloud']}%")
+    if "wind_direction" in weather_data and weather_data["wind_direction"]:
+        details.append(f"风向 {weather_data['wind_direction']}")
+    if "report_time" in weather_data and weather_data["report_time"]:
+        details.append(f"更新时间 {weather_data['report_time']}")
 
     if details:
         st.caption("  |  ".join(details))
@@ -169,24 +157,60 @@ def display_hotel_list(hotel_data: Dict[str, Any]):
         with st.expander(f"🏨 {hotel['hotel_name']}"):
             col1, col2 = st.columns(2)
             with col1:
-                st.write(f"**位置**: {hotel['location']}")
-                st.write(f"**评分**: {'⭐' * int(hotel['rating'])} {hotel['rating']}")
+                location = hotel.get("location") or hotel.get("address") or ""
+                st.write(f"**位置**: {location}")
+                rating = hotel.get("rating")
+                if rating:
+                    st.write(f"**评分**: {'⭐' * int(float(rating))} {rating}")
+                else:
+                    st.write("**评分**: 暂无")
             with col2:
-                st.write(f"**价格**: ¥{hotel['price_per_night']}/晚")
-                st.write(f"**设施**: {', '.join(hotel['amenities'][:4])}")
+                st.write(f"**参考价格**: ¥{hotel.get('price_per_night', 'N/A')}/晚")
+                amenities = hotel.get("amenities", [])
+                if amenities:
+                    st.write(f"**设施**: {', '.join(amenities[:4])}")
 
-            hotel_details = []
-            if "tags" in hotel:
-                hotel_details.append("、".join(hotel["tags"]))
-            if "breakfast" in hotel:
-                hotel_details.append(hotel["breakfast"])
-            if "distance_desc" in hotel:
-                hotel_details.append(hotel["distance_desc"])
-            if "review_count" in hotel:
-                hotel_details.append(f"{hotel['review_count']}条点评")
+            details = []
+            if hotel.get("tel"):
+                details.append(f"电话 {' / '.join(hotel['tel'][:2])}")
+            if hotel.get("note"):
+                details.append(hotel["note"])
 
-            if hotel_details:
-                st.caption("  |  ".join(hotel_details))
+            if details:
+                st.caption("  |  ".join(details))
+
+
+def display_train_list(train_data: Dict[str, Any]):
+    """Display train search results."""
+    if train_data.get("error"):
+        st.warning(f"火车票查询失败: {train_data.get('message')}")
+        return
+
+    trains = train_data.get("trains", [])
+    if not trains:
+        st.info("未找到可用车次")
+        return
+
+    st.success(f"找到 {len(trains)} 趟车次")
+
+    for train in trains[:8]:  # Show top 8
+        with st.expander(f"🚄 {train['train_no']} - {train.get('train_type', '')}"):
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.write(f"**出发**: {train.get('departure_time', 'N/A')}")
+                st.write(f"{train.get('departure_station') or train.get('departure', '')}")
+            with col2:
+                st.write(f"**到达**: {train.get('arrival_time', 'N/A')}")
+                st.write(f"{train.get('arrival_station') or train.get('arrival', '')}")
+            with col3:
+                st.write(f"**参考票价**: ¥{train.get('price', 'N/A')}")
+                if train.get("duration"):
+                    st.write(f"**历时**: {train['duration']}")
+
+            seats = train.get("seats") or {}
+            if seats:
+                seat_desc = "  |  ".join(f"{k}: ¥{v}" for k, v in seats.items())
+                st.caption(seat_desc)
 
 
 def render_sidebar():
@@ -216,6 +240,7 @@ def render_sidebar():
         试试问我：
         - "北京今天天气怎么样？"
         - "帮我查一下上海到北京的机票"
+        - "查一下杭州到北京的高铁票"
         - "北京有什么酒店推荐？"
         - "帮我规划一个北京3日游"
         """)
@@ -247,6 +272,8 @@ def render_chat_interface():
                     display_weather_card(data)
                 elif intent == "flight_booking":
                     display_flight_list(data)
+                elif intent == "train_booking":
+                    display_train_list(data)
                 elif intent == "hotel_booking":
                     display_hotel_list(data)
 
@@ -285,6 +312,8 @@ def render_chat_interface():
                         display_weather_card(actual_data)
                     elif intent == "flight_booking":
                         display_flight_list(actual_data)
+                    elif intent == "train_booking":
+                        display_train_list(actual_data)
                     elif intent == "hotel_booking":
                         display_hotel_list(actual_data)
 
