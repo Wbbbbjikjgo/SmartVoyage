@@ -228,17 +228,26 @@ def _pick(item: Dict[str, Any], *keys: str) -> Any:
 
 
 def _extract_list(data: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Best-effort extraction of the flight list from a vendor response."""
+    """Best-effort extraction of the flight list from a vendor response.
+
+    实测聚合数据航班接口的返回结构为：``{"reason": "...", "result":
+    {"orderid": "...", "flightInfo": [...]}, "error_code": 0}``。
+    """
     if not isinstance(data, dict):
         return []
 
     result = data.get("result")
     if isinstance(result, dict):
-        result = result.get("list") or result.get("flights") or result.get("data")
+        result = (
+            result.get("flightInfo")
+            or result.get("list")
+            or result.get("flights")
+            or result.get("data")
+        )
     if isinstance(result, list):
         return result
 
-    for key in ("data", "list", "flights"):
+    for key in ("flightInfo", "data", "list", "flights"):
         candidate = data.get(key)
         if isinstance(candidate, list):
             return candidate
@@ -248,31 +257,52 @@ def _extract_list(data: Dict[str, Any]) -> List[Dict[str, Any]]:
 def _normalize_flight_item(
     item: Dict[str, Any], departure: str, arrival: str
 ) -> Dict[str, Any]:
-    """Normalize a single flight item into the internal schema."""
+    """Normalize a single flight item into the internal schema.
+
+    实测字段（聚合数据）：airline/airlineName/flightNo/isCodeShare/equipment/
+    departure/departureName/departureDate/departureTime/arrival/arrivalName/
+    arrivalDate/arrivalTime/duration/transferNum/ticketPrice/segments。
+    """
     if not isinstance(item, dict):
         return item
 
+    airline_code = str(_pick(item, "airline") or "")
     flight_no = str(_pick(item, "flightNo", "flight_no", "no", "fnum", "flight") or "")
-    airline_code = flight_no[:2] if flight_no else ""
     airline = (
-        _pick(item, "airlineName", "airline_name", "airline", "airName", "carrier")
-        or _AIRLINES.get(airline_code.upper(), "")
+        _pick(item, "airlineName", "airline_name", "airName", "carrier")
+        or _AIRLINES.get(airline_code.upper(), airline_code)
     )
+
+    # transferNum 表示航段数（1=直飞，2=一次中转），经停次数 = 航段数 - 1
+    segments = _pick(item, "transferNum", "stopCount", "transferCount")
+    stops = None
+    if segments is not None:
+        try:
+            stops = max(0, int(segments) - 1)
+        except (TypeError, ValueError):
+            stops = None
 
     return {
         "flight_no": flight_no,
         "airline": airline,
         "airline_code": airline_code,
-        "departure": _pick(item, "departureCity", "depCity", "fromCity", "departure") or departure,
-        "arrival": _pick(item, "arrivalCity", "arrCity", "toCity", "arrival") or arrival,
-        "departure_airport": _pick(item, "depAirport", "departureAirport", "fromAirport", "depAirportCode"),
-        "arrival_airport": _pick(item, "arrAirport", "arrivalAirport", "toAirport", "arrAirportCode"),
+        "is_code_share": _pick(item, "isCodeShare", "codeShare"),
+        # 城市名来自调用入参，接口返回的 departure/arrival 为机场码
+        "departure": departure,
+        "arrival": arrival,
+        "departure_airport": _pick(item, "departure", "depAirport", "departureAirport", "fromAirport"),
+        "departure_airport_name": _pick(item, "departureName", "departureAirportName"),
+        "arrival_airport": _pick(item, "arrival", "arrAirport", "arrivalAirport", "toAirport"),
+        "arrival_airport_name": _pick(item, "arrivalName", "arrivalAirportName"),
+        "departure_date": _pick(item, "departureDate", "depDate"),
         "departure_time": _pick(item, "departureTime", "depTime", "startTime", "takeoffTime"),
+        "arrival_date": _pick(item, "arrivalDate", "arrDate"),
         "arrival_time": _pick(item, "arrivalTime", "arrTime", "endTime", "landTime"),
         "duration": _pick(item, "duration", "flightTime", "elapsedTime", "costTime"),
-        "aircraft": _pick(item, "aircraft", "planeType", "aircraftType", "craftType"),
-        "stops": _pick(item, "stops", "stopCount", "transferCount", "segments"),
-        "price": _pick(item, "price", "ticketPrice", "lowestPrice", "minPrice", "adultPrice"),
+        "aircraft": _pick(item, "equipment", "aircraft", "planeType", "aircraftType", "craftType"),
+        "segments": segments,
+        "stops": stops,
+        "price": _pick(item, "ticketPrice", "price", "lowestPrice", "minPrice", "adultPrice"),
         "currency": _pick(item, "currency", "currencyCode") or "CNY",
         "available_seats": _pick(item, "availableSeats", "seatCount", "seats", "inventory"),
         "discount": _pick(item, "discount", "discountInfo", "rate"),

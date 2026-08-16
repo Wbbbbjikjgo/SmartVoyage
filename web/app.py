@@ -110,30 +110,34 @@ def display_flight_list(flight_data: Dict[str, Any]):
     st.success(f"找到 {len(flights)} 个航班")
 
     for flight in flights[:8]:  # Show top 8
-        with st.expander(f"✈️ {flight['flight_no']} - {flight['airline']}"):
+        title = f"✈️ {flight.get('flight_no', '')} - {flight.get('airline', '')}"
+        with st.expander(title):
             col1, col2, col3 = st.columns(3)
             with col1:
-                st.write(f"**出发**: {flight['departure_time']}")
-                st.write(f"{flight['departure']} ({flight['departure_airport']})")
+                st.write(f"**出发**: {flight.get('departure_time') or 'N/A'}")
+                dep_airport = flight.get("departure_airport_name") or flight.get("departure_airport") or ""
+                st.write(f"{flight.get('departure', '')} ({dep_airport})")
             with col2:
-                st.write(f"**到达**: {flight['arrival_time']}")
-                st.write(f"{flight['arrival']} ({flight['arrival_airport']})")
+                st.write(f"**到达**: {flight.get('arrival_time') or 'N/A'}")
+                arr_airport = flight.get("arrival_airport_name") or flight.get("arrival_airport") or ""
+                st.write(f"{flight.get('arrival', '')} ({arr_airport})")
             with col3:
-                st.write(f"**价格**: ¥{flight['price']}")
-                st.write(f"**剩余座位**: {flight['available_seats']}")
+                st.write(f"**价格**: ¥{flight.get('price', 'N/A')}")
+                seats = flight.get("available_seats")
+                st.write(f"**剩余座位**: {seats if seats is not None else '—'}")
 
             flight_details = []
-            if "aircraft" in flight:
+            if flight.get("aircraft"):
                 flight_details.append(f"机型 {flight['aircraft']}")
-            if "duration" in flight:
+            if flight.get("duration"):
                 flight_details.append(f"飞行时长 {flight['duration']}")
-            if "on_time_rate" in flight:
+            if flight.get("on_time_rate"):
                 flight_details.append(f"准点率 {flight['on_time_rate']}")
-            if "meal" in flight:
+            if flight.get("meal"):
                 flight_details.append(flight["meal"])
-            if "stops" in flight:
+            if flight.get("stops") is not None:
                 flight_details.append(f"经停 {flight['stops']} 次")
-            if "discount" in flight:
+            if flight.get("discount"):
                 flight_details.append(f"{flight['discount']}")
 
             if flight_details:

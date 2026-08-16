@@ -91,3 +91,56 @@ async def test_hotel_detail_mock():
     await server.close()
     assert result["source"] == "mock"
     assert result["hotel_name"] == "希尔顿酒店"
+
+
+def test_flight_normalize_real_shape():
+    """回归测试：按聚合数据航班接口的真实返回结构做字段归一化。"""
+    from mcp_servers.flight_mcp import _extract_list, _normalize_flight_item
+
+    raw = {
+        "reason": "成功",
+        "result": {
+            "orderid": "JH0001",
+            "flightInfo": [
+                {
+                    "airline": "MU",
+                    "airlineName": "中国东方航空公司",
+                    "flightNo": "MU5100",
+                    "isCodeShare": False,
+                    "equipment": "32N",
+                    "departure": "PEK",
+                    "departureName": "首都国际机场",
+                    "departureDate": "2026-09-01",
+                    "departureTime": "07:00",
+                    "arrival": "PVG",
+                    "arrivalName": "浦东国际机场",
+                    "arrivalDate": "2026-09-01",
+                    "arrivalTime": "08:55",
+                    "duration": "01h55m",
+                    "transferNum": 1,
+                    "ticketPrice": 719,
+                    "segments": [],
+                }
+            ],
+        },
+        "error_code": 0,
+    }
+
+    items = _extract_list(raw)
+    assert len(items) == 1
+
+    flight = _normalize_flight_item(items[0], "北京", "上海")
+    assert flight["flight_no"] == "MU5100"
+    assert flight["airline"] == "中国东方航空公司"
+    assert flight["airline_code"] == "MU"
+    assert flight["departure"] == "北京"
+    assert flight["arrival"] == "上海"
+    assert flight["departure_airport"] == "PEK"
+    assert flight["departure_airport_name"] == "首都国际机场"
+    assert flight["arrival_airport"] == "PVG"
+    assert flight["departure_time"] == "07:00"
+    assert flight["arrival_time"] == "08:55"
+    assert flight["aircraft"] == "32N"
+    assert flight["segments"] == 1
+    assert flight["stops"] == 0  # transferNum=1 表示直飞，经停 0 次
+    assert flight["price"] == 719
