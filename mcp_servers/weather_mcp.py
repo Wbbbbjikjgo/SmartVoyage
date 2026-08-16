@@ -1,356 +1,284 @@
-"""Weather MCP tool server using QWeather API (with mock fallback)."""
+"""Weather MCP tool server backed by the AMap (高德) weather API.
 
-import json
+数据来源：高德开放平台「天气查询」接口
+- 实况天气：``/v3/weather/weatherInfo`` (extensions=base)
+- 天气预报：``/v3/weather/weatherInfo`` (extensions=all, 未来最多 4 天)
+
+高德接口要求 ``city`` 为 adcode（行政区划编码），本模块优先使用本地
+静态映射（零额外调用），未知城市回退到地理编码接口动态解析。
+"""
+
 import logging
-import random
 from datetime import datetime, timedelta
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional
+
 import httpx
+
 from configs.settings import settings
+from mcp_servers.base import BaseMCPServer
+from mcp_servers.city_codes import city_to_adcode
 
 logger = logging.getLogger(__name__)
 
-# Weather condition pools for mock data
-_MOCK_CONDITIONS = [
-    ("晴", "100"), ("多云", "101"), ("阴", "104"),
-    ("小雨", "305"), ("中雨", "306"), ("雷阵雨", "302"),
-    ("大雨", "307"), ("小雪", "400"), ("中雪", "401"),
-    ("大雪", "402"), ("雾", "501"), ("霾", "502"),
-    ("扬沙", "503"), ("晴间多云", "150"),
-]
-
-_MOCK_WIND_DIRECTIONS = ["北风", "东北风", "东风", "东南风", "南风", "西南风", "西风", "西北风"]
+# 高德天气接口路径
+_WEATHER_ENDPOINT = "/v3/weather/weatherInfo"
+_GEOCODE_ENDPOINT = "/v3/geocode/geo"
 
 
-def _mock_current_weather(location: str) -> Dict[str, Any]:
-    """Generate mock current weather data."""
-    text, icon = random.choice(_MOCK_CONDITIONS)
-    temperature = round(random.uniform(5, 35), 1)
-    humidity = random.randint(30, 90)
-    wind_speed = round(random.uniform(1, 30), 1)
-    return {
-        "location": location,
-        "temperature": temperature,
-        "feels_like": round(temperature + random.uniform(-3, 3), 1),
-        "description": text,
-        "humidity": humidity,
-        "wind_speed": wind_speed,
-        "wind_scale": random.randint(1, 8),
-        "wind_direction": random.choice(_MOCK_WIND_DIRECTIONS),
-        "pressure": random.randint(990, 1035),
-        "visibility": random.choice([5, 8, 10, 15, 20, 25, 30]),
-        "precipitation": round(random.uniform(0, 25), 1),
-        "uv_index": random.randint(0, 10),
-        "cloud": random.randint(0, 100),
-        "icon": icon,
-        "update_time": datetime.now().isoformat(),
-        "mock": True,
-    }
+class WeatherMCPServer(BaseMCPServer):
+    """MCP server providing real-time and forecast weather via AMap."""
 
+    name = "Weather Tools"
+    description = "天气查询工具集（高德开放平台）"
 
-def _mock_forecast(location: str, days: int) -> Dict[str, Any]:
-    """Generate mock forecast data."""
-    forecasts = []
-    today = datetime.now().date()
-    for i in range(days):
-        text_day, icon_day = random.choice(_MOCK_CONDITIONS)
-        text_night, icon_night = random.choice(_MOCK_CONDITIONS)
-        temp_min = round(random.uniform(0, 25), 1)
-        forecasts.append({
-            "date": (today + timedelta(days=i)).isoformat(),
-            "temp_max": round(temp_min + random.uniform(5, 12), 1),
-            "temp_min": temp_min,
-            "description_day": text_day,
-            "description_night": text_night,
-            "humidity": random.randint(30, 90),
-            "wind_speed": round(random.uniform(1, 30), 1),
-            "wind_direction": random.choice(_MOCK_WIND_DIRECTIONS),
-            "precipitation": round(random.uniform(0, 30), 1),
-            "icon_day": icon_day,
-            "icon_night": icon_night,
-        })
-    return {
-        "location": location,
-        "forecast": forecasts,
-        "update_time": datetime.now().isoformat(),
-        "mock": True,
-    }
-
-
-def _mock_air_quality(location: str) -> Dict[str, Any]:
-    """Generate mock air quality data."""
-    aqi = random.randint(20, 150)
-    if aqi <= 50:
-        level, category = "1", "优"
-    elif aqi <= 100:
-        level, category = "2", "良"
-    else:
-        level, category = "3", "轻度污染"
-    return {
-        "location": location,
-        "aqi": aqi,
-        "level": level,
-        "category": category,
-        "pm10": round(random.uniform(10, 120), 1),
-        "pm2p5": round(random.uniform(5, 80), 1),
-        "no2": round(random.uniform(5, 60), 1),
-        "so2": round(random.uniform(2, 30), 1),
-        "o3": round(random.uniform(20, 150), 1),
-        "co": round(random.uniform(0.3, 1.5), 2),
-        "update_time": datetime.now().isoformat(),
-        "mock": True,
-    }
-
-
-class WeatherMCPServer:
-    """MCP server for weather-related tools using QWeather API."""
-
-    def __init__(self):
-        """Initialize weather MCP server."""
-        self.api_key = settings.qweather_api_key
-        self.base_url = settings.qweather_base_url
-        self.mock_mode = settings.qweather_mock_mode
-        self.name = "Weather Tools"
-        self.description = "天气查询工具集"
-
-    async def get_current_weather(self, location: str) -> Dict[str, Any]:
-        """
-        Get current weather for a location.
+    def __init__(self, mock_mode: Optional[bool] = None):
+        """Initialize the weather MCP server.
 
         Args:
-            location: City name (Chinese or English)
+            mock_mode: Override mock mode. Defaults to ``settings.weather_mock_mode``.
+        """
+        super().__init__(
+            mock_mode=settings.weather_mock_mode if mock_mode is None else mock_mode
+        )
+        self.api_key = settings.amap_api_key
+        self.base_url = settings.amap_base_url.rstrip("/")
+        self._adcode_cache: Dict[str, str] = {}
+
+    # ================================================================
+    # Public tools
+    # ================================================================
+
+    async def get_current_weather(self, location: str) -> Dict[str, Any]:
+        """获取指定城市的实况天气。
+
+        Args:
+            location: 城市名称（如 "北京"）。
 
         Returns:
-            Weather data dictionary
+            归一化后的实况天气数据，含 ``source`` 字段标识真实/模拟来源。
         """
-        if self.mock_mode:
-            return _mock_current_weather(location)
         try:
-            # First, get location ID using GeoAPI
-            geo_url = f"{self.base_url}/v7/geo/v2/city/lookup"
-            geo_params = {
-                "location": location,
-                "key": self.api_key,
-            }
+            if self.mock_mode:
+                return _mock_current_weather(location)
 
-            async with httpx.AsyncClient() as client:
-                geo_response = await client.get(geo_url, params=geo_params)
-                geo_data = geo_response.json()
+            adcode = await self._resolve_adcode(location)
+            if not adcode:
+                return self.error(f"未找到城市「{location}」的行政区划编码")
 
-                if geo_data.get("code") != "200":
-                    logger.error(f"GeoAPI error: {geo_data}")
-                    return {"error": True, "message": f"Location not found: {location}"}
-
-                # Get the first matching location
-                location_data = geo_data["location"][0]
-                location_id = location_data["id"]
-                location_name = location_data["name"]
-
-                # Now get current weather
-                weather_url = f"{self.base_url}/v7/weather/now"
-                weather_params = {
-                    "location": location_id,
+            data = await self.get_json(
+                f"{self.base_url}{_WEATHER_ENDPOINT}",
+                params={
                     "key": self.api_key,
-                }
+                    "city": adcode,
+                    "extensions": "base",
+                    "output": "JSON",
+                },
+            )
+            return self._parse_current_weather(location, adcode, data)
 
-                weather_response = await client.get(weather_url, params=weather_params)
-                weather_data = weather_response.json()
-
-                if weather_data.get("code") != "200":
-                    logger.error(f"Weather API error: {weather_data}")
-                    return {"error": True, "message": "Failed to get weather data"}
-
-                now = weather_data["now"]
-
-                return {
-                    "location": location_name,
-                    "temperature": float(now["temp"]),
-                    "description": now["text"],
-                    "humidity": int(now["humidity"]),
-                    "wind_speed": float(now["windSpeed"]),
-                    "wind_direction": now["windDir"],
-                    "icon": now["icon"],
-                    "update_time": weather_data["updateTime"],
-                }
-
-        except Exception as e:
-            logger.exception(f"Error getting weather data: {e}")
-            # Fallback to mock data on API failure
-            logger.warning("Falling back to mock weather data")
+        except (httpx.HTTPError, ValueError) as exc:
+            logger.warning("获取实况天气失败，降级为模拟数据: %s", exc)
             return _mock_current_weather(location)
 
     async def get_forecast(self, location: str, days: int = 3) -> Dict[str, Any]:
-        """
-        Get weather forecast for a location.
+        """获取指定城市的天气预报（高德接口最多返回未来 4 天）。
 
         Args:
-            location: City name
-            days: Number of forecast days (3 or 7)
+            location: 城市名称（如 "北京"）。
+            days: 需要的预报天数（1-4）。
 
         Returns:
-            Forecast data dictionary
+            归一化后的天气预报数据。
         """
-        if self.mock_mode:
-            return _mock_forecast(location, days)
         try:
-            # Get location ID
-            geo_url = f"{self.base_url}/v7/geo/v2/city/lookup"
-            geo_params = {"location": location, "key": self.api_key}
+            if self.mock_mode:
+                return _mock_forecast(location, days)
 
-            async with httpx.AsyncClient() as client:
-                geo_response = await client.get(geo_url, params=geo_params)
-                geo_data = geo_response.json()
+            adcode = await self._resolve_adcode(location)
+            if not adcode:
+                return self.error(f"未找到城市「{location}」的行政区划编码")
 
-                if geo_data.get("code") != "200":
-                    return {"error": True, "message": f"Location not found: {location}"}
+            data = await self.get_json(
+                f"{self.base_url}{_WEATHER_ENDPOINT}",
+                params={
+                    "key": self.api_key,
+                    "city": adcode,
+                    "extensions": "all",
+                    "output": "JSON",
+                },
+            )
+            return self._parse_forecast(location, adcode, data, days)
 
-                location_id = geo_data["location"][0]["id"]
-                location_name = geo_data["location"][0]["name"]
-
-                # Get forecast
-                forecast_url = f"{self.base_url}/v7/weather/{days}d"
-                forecast_params = {"location": location_id, "key": self.api_key}
-
-                forecast_response = await client.get(forecast_url, params=forecast_params)
-                forecast_data = forecast_response.json()
-
-                if forecast_data.get("code") != "200":
-                    return {"error": True, "message": "Failed to get forecast data"}
-
-                daily_forecasts = []
-                for day in forecast_data["daily"]:
-                    daily_forecasts.append({
-                        "date": day["fxDate"],
-                        "temp_max": float(day["tempMax"]),
-                        "temp_min": float(day["tempMin"]),
-                        "description_day": day["textDay"],
-                        "description_night": day["textNight"],
-                        "humidity": int(day["humidity"]),
-                        "wind_speed": float(day["windSpeedDay"]),
-                        "icon_day": day["iconDay"],
-                        "icon_night": day["iconNight"],
-                    })
-
-                return {
-                    "location": location_name,
-                    "forecast": daily_forecasts,
-                    "update_time": forecast_data["updateTime"],
-                }
-
-        except Exception as e:
-            logger.exception(f"Error getting forecast: {e}")
-            logger.warning("Falling back to mock forecast data")
+        except (httpx.HTTPError, ValueError) as exc:
+            logger.warning("获取天气预报失败，降级为模拟数据: %s", exc)
             return _mock_forecast(location, days)
 
-    async def get_air_quality(self, location: str) -> Dict[str, Any]:
-        """
-        Get air quality data for a location.
+    # ================================================================
+    # Internal helpers
+    # ================================================================
 
-        Args:
-            location: City name
+    async def _resolve_adcode(self, city: str) -> Optional[str]:
+        """将城市名解析为高德 adcode（静态映射优先，地理编码兜底）。"""
+        normalized = city.strip()
+        if normalized in self._adcode_cache:
+            return self._adcode_cache[normalized]
 
-        Returns:
-            Air quality data dictionary
-        """
-        if self.mock_mode:
-            return _mock_air_quality(location)
-        try:
-            # Get location ID
-            geo_url = f"{self.base_url}/v7/geo/v2/city/lookup"
-            geo_params = {"location": location, "key": self.api_key}
+        adcode = city_to_adcode(normalized)
+        if not adcode:
+            try:
+                data = await self.get_json(
+                    f"{self.base_url}{_GEOCODE_ENDPOINT}",
+                    params={"address": normalized, "key": self.api_key},
+                )
+                geocodes = data.get("geocodes") or []
+                if geocodes:
+                    adcode = geocodes[0].get("adcode")
+            except (httpx.HTTPError, ValueError) as exc:
+                logger.warning("地理编码接口调用失败: %s", exc)
 
-            async with httpx.AsyncClient() as client:
-                geo_response = await client.get(geo_url, params=geo_params)
-                geo_data = geo_response.json()
+        if adcode:
+            self._adcode_cache[normalized] = adcode
+        return adcode
 
-                if geo_data.get("code") != "200":
-                    return {"error": True, "message": f"Location not found: {location}"}
+    def _parse_current_weather(
+        self, location: str, adcode: str, data: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Parse AMap base weather response into a normalized dict."""
+        lives = data.get("lives") or []
+        if not lives:
+            return self.error(f"未查询到「{location}」的天气数据")
+        live = lives[0]
+        return {
+            "location": live.get("city") or location,
+            "adcode": adcode,
+            "description": live.get("weather", ""),
+            "temperature": _to_float(live.get("temperature")),
+            "humidity": _to_float(live.get("humidity")),
+            "wind_direction": live.get("winddirection", ""),
+            "wind_power": live.get("windpower", ""),
+            "report_time": live.get("reporttime", ""),
+            "source": "amap",
+        }
 
-                location_id = geo_data["location"][0]["id"]
-                location_name = geo_data["location"][0]["name"]
+    def _parse_forecast(
+        self, location: str, adcode: str, data: Dict[str, Any], days: int
+    ) -> Dict[str, Any]:
+        """Parse AMap all weather response into a normalized dict."""
+        forecasts = data.get("forecasts") or []
+        if not forecasts:
+            return self.error(f"未查询到「{location}」的天气预报数据")
 
-                # Get air quality
-                air_url = f"{self.base_url}/v7/air/now"
-                air_params = {"location": location_id, "key": self.api_key}
-
-                air_response = await client.get(air_url, params=air_params)
-                air_data = air_response.json()
-
-                if air_data.get("code") != "200":
-                    return {"error": True, "message": "Failed to get air quality data"}
-
-                now = air_data["now"]
-
-                return {
-                    "location": location_name,
-                    "aqi": int(now["aqi"]),
-                    "level": now["level"],
-                    "category": now["category"],
-                    "pm10": float(now["pm10"]),
-                    "pm2p5": float(now["pm2p5"]),
-                    "no2": float(now["no2"]),
-                    "so2": float(now["so2"]),
-                    "o3": float(now["o3"]),
-                    "co": float(now["co"]),
-                    "update_time": air_data["updateTime"],
-                }
-
-        except Exception as e:
-            logger.exception(f"Error getting air quality: {e}")
-            logger.warning("Falling back to mock air quality data")
-            return _mock_air_quality(location)
+        casts = forecasts[0].get("casts") or []
+        forecast = []
+        for day in casts[: max(1, min(days, len(casts)))]:
+            forecast.append({
+                "date": day.get("date", ""),
+                "week": day.get("week", ""),
+                "day_weather": day.get("dayweather", ""),
+                "night_weather": day.get("nightweather", ""),
+                "day_temp": _to_float(day.get("daytemp")),
+                "night_temp": _to_float(day.get("nighttemp")),
+                "day_wind": day.get("daywind", ""),
+                "night_wind": day.get("nightwind", ""),
+                "day_power": day.get("daypower", ""),
+                "night_power": day.get("nightpower", ""),
+            })
+        return {
+            "location": forecasts[0].get("city") or location,
+            "adcode": adcode,
+            "forecast": forecast,
+            "report_time": forecasts[0].get("reporttime", ""),
+            "source": "amap",
+        }
 
     def get_tools(self) -> list:
-        """Get list of available tools."""
+        """Get list of available tools (MCP schema)."""
         return [
             {
                 "name": "get_current_weather",
-                "description": "获取指定城市的当前天气",
+                "description": "获取指定城市的实况天气",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "location": {
-                            "type": "string",
-                            "description": "城市名称（中文或英文）",
-                        }
+                        "location": {"type": "string", "description": "城市名称"},
                     },
                     "required": ["location"],
                 },
             },
             {
                 "name": "get_forecast",
-                "description": "获取指定城市的天气预报",
+                "description": "获取指定城市的天气预报（未来最多4天）",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "location": {
-                            "type": "string",
-                            "description": "城市名称",
-                        },
-                        "days": {
-                            "type": "integer",
-                            "description": "预报天数（3或7）",
-                            "default": 3,
-                        },
-                    },
-                    "required": ["location"],
-                },
-            },
-            {
-                "name": "get_air_quality",
-                "description": "获取指定城市的空气质量数据",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "location": {
-                            "type": "string",
-                            "description": "城市名称",
-                        }
+                        "location": {"type": "string", "description": "城市名称"},
+                        "days": {"type": "integer", "description": "预报天数", "default": 3},
                     },
                     "required": ["location"],
                 },
             },
         ]
+
+
+# ================================================================
+# Mock data generators (used when mock mode is on or API fails)
+# ================================================================
+
+_CONDITIONS = ["晴", "多云", "阴", "小雨", "中雨", "雷阵雨", "小雪", "雾"]
+_WINDS = ["北风", "东北风", "东风", "东南风", "南风", "西南风", "西风", "西北风"]
+
+
+def _to_float(value: Any) -> float:
+    """Safely convert a possibly-string numeric value to float."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _mock_current_weather(location: str) -> Dict[str, Any]:
+    """Generate deterministic-ish mock current weather."""
+    import random
+
+    return {
+        "location": location,
+        "adcode": city_to_adcode(location) or "",
+        "description": random.choice(_CONDITIONS),
+        "temperature": round(random.uniform(5, 35), 1),
+        "humidity": random.randint(30, 90),
+        "wind_direction": random.choice(_WINDS),
+        "wind_power": f"{random.randint(1, 6)}级",
+        "report_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "source": "mock",
+    }
+
+
+def _mock_forecast(location: str, days: int) -> Dict[str, Any]:
+    """Generate mock forecast data."""
+    import random
+
+    today = datetime.now().date()
+    forecast = []
+    for i in range(max(1, min(days, 4))):
+        forecast.append({
+            "date": (today + timedelta(days=i)).isoformat(),
+            "week": str((today + timedelta(days=i)).weekday() + 1),
+            "day_weather": random.choice(_CONDITIONS),
+            "night_weather": random.choice(_CONDITIONS),
+            "day_temp": round(random.uniform(20, 35), 1),
+            "night_temp": round(random.uniform(10, 24), 1),
+            "day_wind": random.choice(_WINDS),
+            "night_wind": random.choice(_WINDS),
+            "day_power": f"{random.randint(1, 3)}-{random.randint(3, 5)}",
+            "night_power": f"{random.randint(1, 3)}-{random.randint(3, 5)}",
+        })
+    return {
+        "location": location,
+        "adcode": city_to_adcode(location) or "",
+        "forecast": forecast,
+        "report_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "source": "mock",
+    }
 
 
 # Global instance
