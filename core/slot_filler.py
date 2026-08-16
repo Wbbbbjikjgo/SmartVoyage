@@ -251,10 +251,12 @@ class SlotFiller:
             提取到的出发城市，如果没有则返回 None
         """
         # -------- 匹配出发模式 --------
-        # "从X出发" 或 "从X到"
+        # "从X出发" 或 "从X到" 或 "从X去" 或 "从X前往"
         departure_patterns = [
             r"从(.+?)出发",  # 从...出发
+            r"从(.+?)前往",  # 从...前往
             r"从(.+?)到",    # 从...到
+            r"从(.+?)去",    # 从...去
         ]
 
         for pattern in departure_patterns:

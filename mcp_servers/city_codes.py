@@ -128,14 +128,38 @@ def _normalize_city(city: str) -> str:
     """Normalize a city name by stripping common administrative suffixes.
 
     Examples:
-        "北京市" -> "北京", "四川省成都市" -> "成都"
+        "北京市" -> "北京", "三亚市" -> "三亚"
     """
     city = city.strip()
-    for suffix in ("特别行政区", "自治区", "自治州", "地区", "市", "省"):
-        if city.endswith(suffix):
+    for suffix in ("特别行政区", "自治区", "自治州", "地区", "市", "省", "县"):
+        if city.endswith(suffix) and len(city) > len(suffix):
             city = city[: -len(suffix)]
             break
     return city
+
+
+def _lookup(table: dict, city: str) -> Optional[str]:
+    """Resolve a (possibly decorated) city name against a mapping table.
+
+    Tries, in order: exact match, suffix-normalized match, then longest
+    known-city substring (handles "四川省成都市" -> "成都").
+    """
+    city = city.strip()
+    if not city:
+        return None
+
+    if city in table:
+        return table[city]
+
+    normalized = _normalize_city(city)
+    if normalized in table:
+        return table[normalized]
+
+    best = None
+    for name in table:
+        if name in city and (best is None or len(name) > len(best)):
+            best = name
+    return table.get(best) if best else None
 
 
 def city_to_adcode(city: str) -> Optional[str]:
@@ -147,7 +171,7 @@ def city_to_adcode(city: str) -> Optional[str]:
     Returns:
         adcode string or ``None`` if unknown.
     """
-    return CITY_TO_ADCODE.get(_normalize_city(city))
+    return _lookup(CITY_TO_ADCODE, city)
 
 
 def city_to_iata(city: str) -> Optional[str]:
@@ -159,7 +183,7 @@ def city_to_iata(city: str) -> Optional[str]:
     Returns:
         IATA code (e.g. "BJS") or ``None`` if unknown.
     """
-    return CITY_TO_IATA.get(_normalize_city(city))
+    return _lookup(CITY_TO_IATA, city)
 
 
 def iata_to_city(code: str) -> Optional[str]:
