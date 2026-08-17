@@ -111,7 +111,7 @@ def test_prepare_parameters_hotel_checkout():
 
 @pytest.mark.asyncio
 async def test_route_itinerary_planning(monkeypatch):
-    """行程规划意图应路由到 plan_trip 技能并填充默认日期/天数。"""
+    """行程规划意图应路由到完整旅行工作流，并填充默认日期/天数。"""
     captured = {}
 
     async def fake_recognize(user_input):
@@ -121,38 +121,78 @@ async def test_route_itinerary_planning(monkeypatch):
             slots={"destination": "北京", "duration": 3},
         )
 
-    async def fake_invoke(agent, skill, params):
-        captured["skill"] = skill
-        captured["params"] = params
-        return {"success": True, "data": {"destination": "北京", "days": []}}
+    async def fake_execute(**kwargs):
+        captured.update(kwargs)
+        return {
+            "success": True,
+            "destination": kwargs["destination"],
+            "start_date": kwargs["start_date"],
+            "duration": kwargs["duration"],
+            "days": [],
+        }
 
     monkeypatch.setattr(agent_router.intent_recognizer, "recognize_with_fallback", fake_recognize)
-    monkeypatch.setattr(agent_router.network, "invoke_agent", fake_invoke)
+    from orchestrator.workflows import travel_workflow
+    monkeypatch.setattr(travel_workflow, "execute", fake_execute)
 
     result = await agent_router.route("帮我规划一个北京3日游")
 
     assert result["agent"] == "itinerary"
-    assert captured["skill"] == "plan_trip"
-    assert captured["params"]["destination"] == "北京"
-    assert captured["params"]["duration"] == 3
-    assert "start_date" in captured["params"]  # 默认明天
+    assert captured["destination"] == "北京"
+    assert captured["duration"] == 3
+    assert "start_date" in captured  # 默认明天
 
 
 def test_build_day_plan():
     """逐日行程应均分景点并附带天气。"""
-    from agents.itinerary_agent import itinerary_agent
+    from core.itinerary_planner import build_day_plan
 
     weather = {"forecast": [{"day_weather": "晴", "day_temp": 31, "night_temp": 21}]}
-    attractions = {
-        "attractions": [
-            {"name": "A"}, {"name": "B"}, {"name": "C"},
-            {"name": "D"}, {"name": "E"}, {"name": "F"},
-        ]
-    }
-    days = itinerary_agent._build_day_plan("2026-08-18", 3, weather, attractions)
+    attractions = [
+        {"name": "A"}, {"name": "B"}, {"name": "C"},
+        {"name": "D"}, {"name": "E"}, {"name": "F"},
+    ]
+    days = build_day_plan("2026-08-18", 3, weather, attractions)
 
     assert len(days) == 3
     assert days[0]["day"] == 1
     assert days[0]["date"] == "2026-08-18"
     assert days[0]["weather"] == "晴 21~31°C"
     assert len(days[0]["attractions"]) == 2  # 6 景点均分 3 天
+
+
+def test_select_skill_weather_forecast():
+    """问「未来/明天」天气应选择天气预报技能。"""
+    assert agent_router._select_skill(
+        IntentType.WEATHER_QUERY, "北京未来三天天气怎么样", {"destination": "北京"}
+    ) == "get_forecast"
+    assert agent_router._select_skill(
+        IntentType.WEATHER_QUERY, "北京明天天气", {"destination": "北京"}
+    ) == "get_forecast"
+
+
+def test_select_skill_weather_current():
+    """只问「今天天气」应选择实况天气技能。"""
+    assert agent_router._select_skill(
+        IntentType.WEATHER_QUERY, "北京天气怎么样", {"destination": "北京"}
+    ) == "get_current_weather"
+
+
+def test_select_skill_flight_detail():
+    """带航班号应选择航班详情技能。"""
+    assert agent_router._select_skill(
+        IntentType.FLIGHT_BOOKING, "CA1234这个航班怎么样", {}
+    ) == "get_flight_detail"
+    assert agent_router._select_skill(
+        IntentType.FLIGHT_BOOKING, "查一下北京到上海的机票", {}
+    ) == "search_flights"
+
+
+def test_select_skill_hotel_attractions():
+    """问景点应选择景点搜索技能。"""
+    assert agent_router._select_skill(
+        IntentType.HOTEL_BOOKING, "北京有什么好玩的景点", {}
+    ) == "search_attractions"
+    assert agent_router._select_skill(
+        IntentType.HOTEL_BOOKING, "北京有什么酒店推荐", {}
+    ) == "search_hotels"
