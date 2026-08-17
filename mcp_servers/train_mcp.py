@@ -160,48 +160,63 @@ def _extract_list(data: Dict[str, Any]) -> List[Dict[str, Any]]:
 def _normalize_train_item(
     item: Dict[str, Any], start: str, end: str
 ) -> Dict[str, Any]:
-    """Normalize a single train item into the internal schema."""
+    """Normalize a single train item into the internal schema.
+
+    实测极速数据接口字段：trainno/type/typename/station/endstation/
+    departuretime/arrivaltime/costtime/day + 各席别 price 字段。
+    """
     if not isinstance(item, dict):
         return item
 
-    train_no = str(_pick(item, "trainNo", "train_no", "trainno", "checi", "trainCode") or "")
+    train_no = str(_pick(item, "trainno", "trainNo", "train_no", "checi", "trainCode") or "")
     seats = _extract_seats(item)
     return {
         "train_no": train_no,
-        "train_type": _pick(item, "trainType", "train_type", "type") or _infer_type(train_no),
+        "train_type": _pick(item, "typename", "trainType", "train_type", "typeName")
+        or _infer_type(train_no),
         "departure": start,
         "arrival": end,
-        "departure_station": _pick(item, "startStation", "fromStation", "from", "start_station"),
-        "arrival_station": _pick(item, "endStation", "toStation", "to", "end_station"),
-        "departure_time": _pick(item, "startTime", "fromTime", "departureTime", "start_time"),
-        "arrival_time": _pick(item, "endTime", "toTime", "arrivalTime", "end_time"),
-        "duration": _pick(item, "runTime", "duration", "costTime", "travelTime"),
+        "departure_station": _pick(item, "station", "startStation", "fromStation", "from", "start_station"),
+        "arrival_station": _pick(item, "endstation", "endStation", "toStation", "to", "end_station"),
+        "departure_time": _pick(item, "departuretime", "startTime", "fromTime", "departureTime", "start_time"),
+        "arrival_time": _pick(item, "arrivaltime", "endTime", "toTime", "arrivalTime", "end_time"),
+        "duration": _pick(item, "costtime", "runTime", "duration", "costTime", "travelTime"),
+        "day": _pick(item, "day"),
         "seats": seats,
         "price": _default_price(seats),
         "date": _pick(item, "date", "trainDate"),
     }
 
 
+# 12306 席别缩写 → 中文名称（极速数据接口的 price 字段命名规则）
+_SEAT_PRICE_FIELDS = {
+    "商务座": ("pricesw",),
+    "特等座": ("pricetd", "pricetdz"),
+    "一等座": ("priceyd", "priceydz"),
+    "二等座": ("priceed", "priceedz"),
+    "高级软卧": ("pricegr",),
+    "动卧": ("pricedw",),
+    "软卧": ("pricerw", "pricerw2"),
+    "硬卧": ("priceyw", "priceyw3"),
+    "硬座": ("priceyz",),
+    "软座": ("pricerz",),
+    "无座": ("pricewz",),
+}
+
+
 def _extract_seats(item: Dict[str, Any]) -> Dict[str, float]:
-    """Extract seat price map from a train item (best-effort)."""
+    """Extract seat price map from a train item (12306 席别缩写)。"""
     seats: Dict[str, float] = {}
-    # 常见席别字段名
-    seat_fields = {
-        "商务座": ("商务座", "businessSeat", "business"),
-        "一等座": ("一等座", "firstSeat", "first"),
-        "二等座": ("二等座", "secondSeat", "second"),
-        "无座": ("无座", "noSeat", "noneSeat"),
-        "硬座": ("硬座", "hardSeat"),
-        "硬卧": ("硬卧", "hardSleep"),
-        "软卧": ("软卧", "softSleep"),
-    }
-    for label, keys in seat_fields.items():
-        value = _pick(item, *keys)
-        if value is not None:
+    for label, fields in _SEAT_PRICE_FIELDS.items():
+        for field in fields:
+            value = item.get(field)
+            if value in (None, "", "-"):
+                continue
             try:
                 seats[label] = float(value)
             except (TypeError, ValueError):
                 pass
+            break
     return seats
 
 

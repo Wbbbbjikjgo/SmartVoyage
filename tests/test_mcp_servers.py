@@ -144,3 +144,42 @@ def test_flight_normalize_real_shape():
     assert flight["segments"] == 1
     assert flight["stops"] == 0  # transferNum=1 表示直飞，经停 0 次
     assert flight["price"] == 719
+
+
+def test_train_normalize_real_shape():
+    """回归测试：按极速数据火车票接口的真实返回结构做字段归一化。"""
+    from mcp_servers.train_mcp import _normalize_train_item
+
+    raw_item = {
+        "trainno": "K2907",
+        "type": "K",
+        "typename": "快速",
+        "station": "商丘",
+        "endstation": "洛阳",
+        "departuretime": "00:07",
+        "arrivaltime": "04:57",
+        "costtime": "4小时50分",
+        "day": 1,
+        "priceyw": 96.5,
+        "priceyw1": 96.5,
+        "priceyw2": 101.5,
+        "priceyw3": 104.5,
+        "priceyz": 50.5,
+        "pricewz": 50.5,
+        "pricerz": "-",
+        "pricerw": "-",
+        "pricesw": "-",
+    }
+
+    train = _normalize_train_item(raw_item, "商丘", "洛阳")
+    assert train["train_no"] == "K2907"
+    assert train["train_type"] == "快速"
+    assert train["departure_station"] == "商丘"
+    assert train["arrival_station"] == "洛阳"
+    assert train["departure_time"] == "00:07"
+    assert train["arrival_time"] == "04:57"
+    assert train["duration"] == "4小时50分"
+    assert train["seats"]["硬座"] == 50.5
+    assert train["seats"]["硬卧"] == 96.5
+    assert train["seats"]["无座"] == 50.5
+    assert train["price"] == 50.5  # K 字头无二等座，取无座价
