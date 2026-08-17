@@ -185,32 +185,46 @@ class HotelMCPServer(BaseMCPServer):
         }
 
     def get_tools(self) -> list:
-        """Get list of available tools (MCP schema)."""
         return [
             {
                 "name": "search_hotels",
-                "description": "搜索可用酒店",
+                "description": "搜索指定城市的可用酒店，支持入住日期和人数筛选",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "location": {"type": "string", "description": "城市名称"},
+                        "location": {"type": "string", "description": "城市名称，如'北京'"},
                         "check_in": {"type": "string", "description": "入住日期（YYYY-MM-DD）"},
                         "check_out": {"type": "string", "description": "退房日期（YYYY-MM-DD）"},
                         "guests": {"type": "integer", "description": "入住人数", "default": 2},
+                        "price_range": {"type": "string", "description": "价格范围，如'200-500'"},
+                        "limit": {"type": "integer", "description": "返回数量上限", "default": 15},
                     },
                     "required": ["location"],
                 },
             },
             {
                 "name": "get_hotel_detail",
-                "description": "获取酒店详细信息",
+                "description": "获取指定酒店的详细信息，包括地址、电话、设施等",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "hotel_name": {"type": "string", "description": "酒店名称"},
-                        "city": {"type": "string", "description": "所在城市"},
+                        "city": {"type": "string", "description": "所在城市，用于缩小搜索范围"},
+                        "date": {"type": "string", "description": "入住日期（可选）"},
                     },
                     "required": ["hotel_name"],
+                },
+            },
+            {   # 👈 新增
+                "name": "search_attractions",
+                "description": "搜索指定城市的景点，用于旅游规划",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {"type": "string", "description": "城市名称，如'北京'"},
+                        "limit": {"type": "integer", "description": "返回景点数量上限", "default": 10},
+                    },
+                    "required": ["location"],
                 },
             },
         ]

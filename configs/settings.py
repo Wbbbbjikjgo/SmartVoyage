@@ -51,11 +51,11 @@ class Settings(BaseSettings):
         description="阿里云火车票查询接口地址",
     )
     flight_mock_mode: bool = Field(
-        default=True,
+        default=False,
         description="航班查询使用模拟数据（默认开启，保护免费调用额度）",
     )
     train_mock_mode: bool = Field(
-        default=True,
+        default=False,
         description="火车票查询使用模拟数据（默认开启，保护免费调用额度）",
     )
 
