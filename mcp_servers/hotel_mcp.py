@@ -121,6 +121,47 @@ class HotelMCPServer(BaseMCPServer):
             return hotels[0]
         return self.error(f"未查询到酒店「{hotel_name}」的详情")
 
+    async def search_attractions(self, location: str, limit: int = 10) -> Dict[str, Any]:
+        """搜索指定城市的景点（高德 POI，keywords=景点）。
+
+        Args:
+            location: 城市名称（如 "北京"）。
+            limit: 返回景点数量上限。
+
+        Returns:
+            归一化后的景点搜索结果。
+        """
+        if self.mock_mode:
+            return _mock_search_attractions(location, limit)
+
+        try:
+            data = await self._search_poi("景点", location, limit)
+        except httpx.HTTPError as exc:
+            logger.warning("景点接口调用失败，降级为模拟数据: %s", exc)
+            return _mock_search_attractions(location, limit)
+
+        pois = data.get("pois") or []
+        return {
+            "location": location,
+            "attractions": [_normalize_attraction_item(p) for p in pois],
+            "total": len(pois),
+            "source": "amap",
+        }
+
+    async def _search_poi(self, keywords: str, city: str, limit: int) -> Dict[str, Any]:
+        """调用高德关键字搜索接口，返回原始 POI 响应。"""
+        return await self.get_json(
+            f"{self.base_url}{_PLACE_ENDPOINT}",
+            params={
+                "key": self.api_key,
+                "keywords": keywords,
+                "city": city,
+                "offset": str(min(max(limit, 1), 25)),
+                "page": "1",
+                "extensions": "all",
+            },
+        )
+
     def _normalize_hotels(
         self,
         location: str,
@@ -220,6 +261,33 @@ def _readable_location(poi: Dict[str, Any]) -> str:
     return "".join(p for p in parts if p)
 
 
+def _normalize_attraction_item(poi: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize a single AMap POI into the attraction schema."""
+    if not isinstance(poi, dict):
+        return poi
+
+    biz_ext = poi.get("biz_ext") or {}
+    rating = biz_ext.get("rating") or poi.get("rating")
+    try:
+        rating = float(rating) if rating else None
+    except (TypeError, ValueError):
+        rating = None
+
+    photos = [p.get("url") for p in (poi.get("photos") or []) if isinstance(p, dict) and p.get("url")]
+
+    return {
+        "name": poi.get("name", ""),
+        "address": poi.get("address", ""),
+        "district": poi.get("adname", ""),
+        "city": poi.get("cityname", ""),
+        "location": _readable_location(poi),
+        "coords": _format_location(poi),
+        "rating": rating,
+        "photos": photos,
+        "source": "amap",
+    }
+
+
 def _format_location(poi: Dict[str, Any]) -> str:
     """Format POI coordinates as 'lng,lat'."""
     loc = poi.get("location")
@@ -317,6 +385,36 @@ def _mock_hotel_detail(hotel_name: str, date: str) -> Dict[str, Any]:
         "price_per_night": random.randint(200, 1500),
         "currency": "CNY",
         "date": date,
+        "source": "mock",
+    }
+
+
+# 常见城市代表性景点（mock 兜底用）
+_MOCK_ATTRACTIONS = [
+    "天安门广场", "故宫博物院", "八达岭长城", "颐和园", "天坛公园",
+    "南锣鼓巷", "王府井大街", "北海公园", "圆明园", "奥林匹克公园",
+    "香山公园", "什刹海", "鸟巢", "水立方", "国子监",
+]
+
+
+def _mock_search_attractions(location: str, limit: int) -> Dict[str, Any]:
+    """Generate mock attraction search results."""
+    picked = random.sample(_MOCK_ATTRACTIONS, min(limit, len(_MOCK_ATTRACTIONS)))
+    attractions = [
+        {
+            "name": a,
+            "address": f"{location}市",
+            "district": "市中心",
+            "city": location,
+            "rating": round(random.uniform(4.0, 5.0), 1),
+            "source": "mock",
+        }
+        for a in picked
+    ]
+    return {
+        "location": location,
+        "attractions": attractions,
+        "total": len(attractions),
         "source": "mock",
     }
 

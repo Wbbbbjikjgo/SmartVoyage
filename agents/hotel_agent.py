@@ -33,6 +33,13 @@ class HotelAgent(BaseAgent):
                 tags=["hotel", "detail"],
             )
         )
+        self.register_skill(
+            Skill(
+                name="search_attractions",
+                description="搜索指定城市的景点",
+                tags=["attraction", "search"],
+            )
+        )
 
     def get_agent_card(self, base_url: str) -> AgentCard:
         """Get agent card for A2A protocol."""
@@ -73,6 +80,12 @@ class HotelAgent(BaseAgent):
     ) -> Dict[str, Any]:
         """获取酒店详细信息。"""
         return await hotel_mcp.get_hotel_detail(hotel_name, city, date)
+
+    async def skill_search_attractions(
+        self, location: str, limit: int = 10
+    ) -> Dict[str, Any]:
+        """搜索指定城市的景点。"""
+        return await hotel_mcp.search_attractions(location, limit)
 
 
 # Global instance
