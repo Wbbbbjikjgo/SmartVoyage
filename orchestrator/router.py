@@ -6,11 +6,15 @@ Agent 路由器：根据用户意图，将任务智能路由到对应的 Agent
 """
 
 import logging
+import re
 from typing import Dict, Any, List, Tuple, Optional
+from langchain_core.prompts import ChatPromptTemplate
 from models.schemas import IntentType, IntentResult
 from core.intent_recognizer import intent_recognizer
 from core.slot_filler import slot_filler
+from core.llm import get_chat_llm
 from orchestrator.agent_network import agent_network
+from orchestrator.workflows import travel_workflow
 
 # 获取当前模块的日志记录器
 logger = logging.getLogger(__name__)
@@ -126,11 +130,14 @@ class AgentRouter:
         # 路由器会返回 "还需要提供日期"
         self.skill_required_params: Dict[str, List[str]] = {
             "get_current_weather": ["location"],                              # 天气：需要位置
+            "get_forecast": ["location"],                                     # 天气预报：需要位置
             "search_flights": ["departure", "arrival", "date", "passengers"], # 航班：出发地、目的地、日期、人数
+            "get_flight_detail": ["flight_no", "date"],                       # 航班详情：航班号、日期
             "search_trains": ["start", "end", "date", "is_high_speed"],       # 火车票：出发、到达、日期、是否高铁
             "search_hotels": ["location", "check_in", "check_out", "guests"], # 酒店：位置、入住、退房、人数
+            "get_hotel_detail": ["hotel_name"],                               # 酒店详情：酒店名称
+            "search_attractions": ["location"],                               # 景点：位置
             "create_itinerary": ["user_id", "destination", "start_date", "duration", "budget"],  # 行程：用户ID、目的地、开始日期、天数、预算
-            "plan_trip": ["user_id", "destination", "start_date", "duration", "budget", "guests"],  # 完整行程规划
         }
 
     # ================================================================
@@ -195,6 +202,11 @@ class AgentRouter:
             params["date"] = tomorrow
             params.setdefault("_defaults_used", []).append("date=明天")
 
+        # 技能：航班详情
+        if skill_name == "get_flight_detail" and not params.get("date"):
+            params["date"] = tomorrow
+            params.setdefault("_defaults_used", []).append("date=明天")
+
         # 技能：搜索高铁/火车票
         if skill_name == "search_trains":
             if not params.get("date"):
@@ -217,8 +229,8 @@ class AgentRouter:
                 except (ValueError, TypeError):
                     params["check_out"] = (date.today() + timedelta(days=3)).isoformat()
 
-        # 技能：创建行程
-        if skill_name in ("create_itinerary", "plan_trip"):
+        # 技能：创建行程（现在由工作流直接调用，此处保留以防单独调用）
+        if skill_name == "create_itinerary":
             if not params.get("start_date"):
                 params["start_date"] = tomorrow
                 params.setdefault("_defaults_used", []).append("start_date=明天")
@@ -266,7 +278,11 @@ class AgentRouter:
         if intent_result.intent == IntentType.GENERAL_QA:
             return await self._handle_general_qa(user_input, intent_result, slots)
 
-        # -------- 3.4 查找对应的 Agent --------
+        # -------- 3.4 行程规划走完整工作流（多 Agent 协作） --------
+        if intent_result.intent == IntentType.ITINERARY_PLANNING:
+            return await self._route_itinerary(user_input, intent_result, slots)
+
+        # -------- 3.5 查找对应的 Agent --------
         agent_name = self.intent_to_agent.get(intent_result.intent)
         if not agent_name:
             # 没有找到对应的 Agent，返回错误
@@ -278,10 +294,18 @@ class AgentRouter:
                 "slots": slots,
             }
 
-        # -------- 3.5 查找对应的技能 --------
-        skill_name = self.intent_to_skill.get(intent_result.intent)
+        # -------- 3.6 动态选择技能 --------
+        # 同一意图下可能有多个技能（如实况天气 vs 天气预报），
+        # 根据用户输入的具体诉求选择最合适的技能。
+        skill_name = self._select_skill(intent_result.intent, user_input, slots)
 
-        # -------- 3.6 准备参数 --------
+        # 航班详情/酒店详情需要从输入中提取航班号/酒店名
+        if skill_name == "get_flight_detail":
+            slots.setdefault("flight_no", self._extract_flight_no(user_input))
+        elif skill_name == "get_hotel_detail":
+            slots.setdefault("hotel_name", self._extract_hotel_name(user_input))
+
+        # -------- 3.7 准备参数 --------
         # 槽位 → 技能参数（映射 + 过滤 + 默认值）
         parameters = self._prepare_parameters(agent_name, skill_name, slots)
 
@@ -307,8 +331,8 @@ class AgentRouter:
             }
 
         # -------- 3.8 设置默认用户ID --------
-        # 创建行程/规划行程时需要 user_id，如果用户没提供，默认用 1（演示用户）
-        if skill_name in ("create_itinerary", "plan_trip") and "user_id" not in parameters:
+        # 创建行程时需要 user_id，如果用户没提供，默认用 1（演示用户）
+        if skill_name == "create_itinerary" and "user_id" not in parameters:
             parameters["user_id"] = 1
 
         # -------- 3.9 移除内部元数据 --------
@@ -358,6 +382,148 @@ class AgentRouter:
         return await self.network.invoke_agent(agent_name, skill, parameters)
 
     # ================================================================
+    # 4.5 技能选择 & 行程规划路由
+    # ================================================================
+
+    def _select_skill(
+        self,
+        intent: IntentType,
+        user_input: str,
+        slots: Dict[str, Any],
+    ) -> str:
+        """
+        在同一意图下，根据用户输入的具体诉求选择最合适的技能。
+
+        例如天气查询：问「今天天气」→ 实况（get_current_weather），
+        问「未来三天天气」→ 预报（get_forecast）。
+
+        Args:
+            intent: 识别到的意图类型。
+            user_input: 用户原始输入。
+            slots: 提取到的槽位。
+
+        Returns:
+            技能名称（若无法确定则返回该意图的默认技能）。
+        """
+        if intent == IntentType.WEATHER_QUERY:
+            forecast_kw = ("明天", "后天", "未来", "预报", "几天", "下周", "本周", "最近")
+            if any(kw in user_input for kw in forecast_kw) or "duration" in slots:
+                return "get_forecast"
+            return "get_current_weather"
+
+        if intent == IntentType.FLIGHT_BOOKING:
+            if self._extract_flight_no(user_input):
+                return "get_flight_detail"
+            return "search_flights"
+
+        if intent == IntentType.TRAIN_BOOKING:
+            return "search_trains"
+
+        if intent == IntentType.HOTEL_BOOKING:
+            attraction_kw = ("景点", "好玩", "游玩", "攻略", "旅游", "景区", "风景")
+            if any(kw in user_input for kw in attraction_kw):
+                return "search_attractions"
+            detail_kw = ("详情", "电话", "设施", "评分", "地址")
+            if self._extract_hotel_name(user_input) and any(kw in user_input for kw in detail_kw):
+                return "get_hotel_detail"
+            return "search_hotels"
+
+        if intent == IntentType.ITINERARY_PLANNING:
+            return "plan_trip"
+
+        # 兜底：返回该意图的默认技能
+        return self.intent_to_skill.get(intent, "")
+
+    @staticmethod
+    def _extract_flight_no(text: str) -> Optional[str]:
+        """从文本中提取航班号（如 CA1234 / MU8218）。"""
+        match = re.search(r"[A-Za-z]{2}\d{3,4}", text)
+        return match.group(0).upper() if match else None
+
+    @staticmethod
+    def _extract_hotel_name(text: str) -> Optional[str]:
+        """从文本中提取酒店名称（如「希尔顿酒店」「汉庭酒店」）。"""
+        match = re.search(r"([\u4e00-\u9fa5A-Za-z0-9]{2,12}(?:酒店|宾馆|饭店|民宿|客栈))", text)
+        return match.group(1) if match else None
+
+    async def _route_itinerary(
+        self,
+        user_input: str,
+        intent_result: IntentResult,
+        slots: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        将行程规划意图路由到完整旅行工作流（多 Agent 协作）。
+
+        与「单个 Agent 技能」不同，行程规划需要天气/景点/航班/车次/酒店
+        多个 Agent 协作，因此统一走 TravelPlanningWorkflow，最后交由大模型
+        生成逐日计划。
+
+        Args:
+            user_input: 用户输入。
+            intent_result: 意图识别结果。
+            slots: 提取到的槽位。
+
+        Returns:
+            路由结果，``data.data`` 为完整行程结果。
+        """
+        from datetime import date, timedelta
+
+        destination = slots.get("destination")
+        if not destination:
+            return {
+                "success": True,
+                "agent": "itinerary",
+                "intent": intent_result.intent.value,
+                "confidence": intent_result.confidence,
+                "slots": slots,
+                "missing_slots": ["destination"],
+                "data": {"message": "请告诉我你想去哪个城市，我才能帮你规划行程。"},
+            }
+
+        defaults_used = []
+
+        start_date = slots.get("date") or slots.get("start_date")
+        if not start_date:
+            start_date = (date.today() + timedelta(days=1)).isoformat()
+            defaults_used.append("start_date=明天")
+
+        try:
+            duration = int(slots.get("duration") or 3)
+        except (TypeError, ValueError):
+            duration = 3
+        if "duration" not in slots:
+            defaults_used.append("duration=3天")
+
+        try:
+            guests = int(slots.get("guests") or 1)
+        except (TypeError, ValueError):
+            guests = 1
+
+        departure = slots.get("departure")
+        budget = slots.get("budget")
+
+        result = await travel_workflow.execute(
+            user_id=1,
+            destination=destination,
+            start_date=start_date,
+            duration=duration,
+            departure=departure,
+            budget=budget,
+            guests=guests,
+        )
+
+        return {
+            "success": True,
+            "agent": "itinerary",
+            "intent": intent_result.intent.value,
+            "confidence": intent_result.confidence,
+            "slots": slots,
+            "defaults_used": defaults_used,
+            "data": {"success": bool(result.get("success")), "data": result},
+        }
+
+    # ================================================================
     # 5. 通用问答处理
     # ================================================================
 
@@ -370,7 +536,7 @@ class AgentRouter:
         """
         处理通用问答（闲聊/打招呼等）
 
-        当用户输入不是具体的业务请求时，走这个分支
+        使用 LLM 顺着用户的话自然回应，并适时提示能提供的服务。
 
         Args:
             user_input: 用户输入
@@ -380,18 +546,39 @@ class AgentRouter:
         Returns:
             响应字典
         """
-        # 目前返回固定欢迎语
-        # 生产环境可以接入 LLM 生成更自然的回复
+        reply = await self._generate_general_reply(user_input)
         return {
             "success": True,
             "agent": "general",
             "intent": IntentType.GENERAL_QA.value,
             "confidence": intent_result.confidence,
             "slots": slots,
-            "data": {
-                "message": "我是 SmartVoyage 智能旅行助手，可以帮您查询天气、预订机票酒店、规划行程。请问有什么可以帮您的？",
-            },
+            "data": {"message": reply},
         }
+
+    async def _generate_general_reply(self, user_input: str) -> str:
+        """用 LLM 生成自然、顺着用户话说的闲聊回复。"""
+        fallback = (
+            "我是 SmartVoyage 智能旅行助手，可以帮您查询天气、预订机票/高铁票/酒店、"
+            "规划旅行行程。请问有什么可以帮您的？"
+        )
+        try:
+            llm = get_chat_llm(temperature=0.7)
+            prompt = ChatPromptTemplate.from_messages([
+                (
+                    "system",
+                    "你是 SmartVoyage 智能旅行助手，热情友好。用户可能只是闲聊或打招呼，"
+                    "请顺着用户的话自然回应（一两句话即可），并在合适时机自然地提示你能帮忙做的事："
+                    "查询天气、查询/预订机票、高铁票、酒店、规划旅行行程。回答简洁自然，用中文。",
+                ),
+                ("human", "{input}"),
+            ])
+            response = await llm.ainvoke(prompt.format_messages(input=user_input))
+            content = response.content.strip()
+            return content or fallback
+        except Exception as e:
+            logger.warning("通用问答 LLM 调用失败，使用兜底回复: %s", e)
+            return fallback
 
     # ================================================================
     # 6. 获取路由配置信息
