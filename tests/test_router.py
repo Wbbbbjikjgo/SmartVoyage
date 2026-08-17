@@ -107,3 +107,52 @@ def test_prepare_parameters_hotel_checkout():
     assert params["location"] == "北京"
     assert params["check_in"] == "2026-08-20"
     assert params["check_out"] == "2026-08-23"
+
+
+@pytest.mark.asyncio
+async def test_route_itinerary_planning(monkeypatch):
+    """行程规划意图应路由到 plan_trip 技能并填充默认日期/天数。"""
+    captured = {}
+
+    async def fake_recognize(user_input):
+        return IntentResult(
+            intent=IntentType.ITINERARY_PLANNING,
+            confidence=0.9,
+            slots={"destination": "北京", "duration": 3},
+        )
+
+    async def fake_invoke(agent, skill, params):
+        captured["skill"] = skill
+        captured["params"] = params
+        return {"success": True, "data": {"destination": "北京", "days": []}}
+
+    monkeypatch.setattr(agent_router.intent_recognizer, "recognize_with_fallback", fake_recognize)
+    monkeypatch.setattr(agent_router.network, "invoke_agent", fake_invoke)
+
+    result = await agent_router.route("帮我规划一个北京3日游")
+
+    assert result["agent"] == "itinerary"
+    assert captured["skill"] == "plan_trip"
+    assert captured["params"]["destination"] == "北京"
+    assert captured["params"]["duration"] == 3
+    assert "start_date" in captured["params"]  # 默认明天
+
+
+def test_build_day_plan():
+    """逐日行程应均分景点并附带天气。"""
+    from agents.itinerary_agent import itinerary_agent
+
+    weather = {"forecast": [{"day_weather": "晴", "day_temp": 31, "night_temp": 21}]}
+    attractions = {
+        "attractions": [
+            {"name": "A"}, {"name": "B"}, {"name": "C"},
+            {"name": "D"}, {"name": "E"}, {"name": "F"},
+        ]
+    }
+    days = itinerary_agent._build_day_plan("2026-08-18", 3, weather, attractions)
+
+    assert len(days) == 3
+    assert days[0]["day"] == 1
+    assert days[0]["date"] == "2026-08-18"
+    assert days[0]["weather"] == "晴 21~31°C"
+    assert len(days[0]["attractions"]) == 2  # 6 景点均分 3 天

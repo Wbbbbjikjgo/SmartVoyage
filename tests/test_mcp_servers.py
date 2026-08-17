@@ -93,6 +93,16 @@ async def test_hotel_detail_mock():
     assert result["hotel_name"] == "希尔顿酒店"
 
 
+@pytest.mark.asyncio
+async def test_search_attractions_mock():
+    server = HotelMCPServer(mock_mode=True)
+    result = await server.search_attractions("北京", limit=6)
+    await server.close()
+    assert result["source"] == "mock"
+    assert 1 <= len(result["attractions"]) <= 6
+    assert result["attractions"][0]["name"]
+
+
 def test_flight_normalize_real_shape():
     """回归测试：按聚合数据航班接口的真实返回结构做字段归一化。"""
     from mcp_servers.flight_mcp import _extract_list, _normalize_flight_item
