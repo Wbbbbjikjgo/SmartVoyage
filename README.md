@@ -52,7 +52,7 @@ web/ → api/ → orchestrator/ → agents/ → mcp_servers/
 
 | 模块 | 职责 |
 | --- | --- |
-| `agents/` | A2A Agent 实现（天气/航班/酒店/行程） |
+| `agents/` | A2A Agent 实现（天气/航班/火车票/酒店/行程） |
 | `mcp_servers/` | MCP 工具服务器，封装外部 API / 模拟数据 |
 | `orchestrator/` | 工作流编排、Agent 网络、任务路由 |
 | `core/` | 意图识别、槽位填充、上下文管理 |
@@ -96,21 +96,37 @@ cp .env.example .env
 
 > 航班/火车票为阿里云付费接口，免费额度极少，默认 `FLIGHT_MOCK_MODE` / `TRAIN_MOCK_MODE` 为 `true` 以保护额度；确认配额充足后再改为 `false`。
 
-### 4. 启动服务（按顺序）
+### 4. 初始化数据库
 
-| 顺序 | 服务 | 命令 | 端口 |
-| --- | --- | --- | --- |
-| 1 | 基础设施 | 启动本地 MySQL / Redis | 3306 / 6379 |
-| 2 | API 网关 | `uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload` | 8000 |
-| 3 | 前端 | `streamlit run web/app.py --server.port 8501` | 8501 |
+先确保本地 MySQL 已启动，然后创建数据库（表结构会在应用启动时自动创建）：
 
-> 说明：当前版本 Agent 与 MCP 均在网关进程内以本地对象运行，无需单独启动 5001-5004 / 5010-5013 端口服务；如需分布式部署，可参考 `deploy/` 与 `docs/`。
+```bash
+mysql -u root -p -e "CREATE DATABASE IF NOT EXISTS smartvoyage CHARACTER SET utf8mb4;"
+```
 
-### 5. 访问
+### 5. 启动服务（需要两个终端）
 
-- 前端界面：http://localhost:8501
-- API 文档：http://localhost:8000/docs
-- 健康检查：http://localhost:8000/health
+**终端 1 —— 启动 API 网关（端口 8000）：**
+
+```bash
+uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+**终端 2 —— 启动前端（端口 8501）：**
+
+```bash
+streamlit run web/app.py --server.port 8501
+```
+
+> 说明：当前版本 Agent 与 MCP 均在网关进程内以本地对象运行，无需单独启动 5001-5005 / 5010-5014 端口服务；如需分布式部署，可参考 `deploy/` 与 `docs/`。
+
+### 6. 访问
+
+| 入口 | 地址 |
+| --- | --- |
+| 前端界面 | http://localhost:8501 |
+| API 文档（Swagger） | http://localhost:8000/docs |
+| 健康检查 | http://localhost:8000/health |
 
 ---
 
@@ -130,13 +146,13 @@ cp .env.example .env
 
 ```text
 SmartVoyage/
-├── agents/            # A2A Agent（weather/flight/hotel/itinerary + base）
+├── agents/            # A2A Agent（weather/flight/train/hotel/itinerary + base）
 ├── api/
 │   ├── routes/        # chat / agent 路由
 │   └── main.py        # FastAPI 入口
 ├── core/              # 意图识别、槽位填充、上下文管理
 ├── orchestrator/      # Agent 网络、路由、旅行规划工作流
-├── mcp_servers/       # 天气/航班/酒店/数据库 MCP 工具
+├── mcp_servers/       # 天气/航班/火车票/酒店/数据库 MCP 工具
 ├── models/            # SQLAlchemy 模型 + Pydantic Schema
 ├── configs/           # 配置管理
 ├── web/               # Streamlit 前端
