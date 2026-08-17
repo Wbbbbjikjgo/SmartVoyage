@@ -217,6 +217,39 @@ def display_train_list(train_data: Dict[str, Any]):
                 st.caption(seat_desc)
 
 
+def display_itinerary(itinerary_data: Dict[str, Any]):
+    """Display a detailed trip itinerary."""
+    if itinerary_data.get("error"):
+        st.warning(f"行程规划失败: {itinerary_data.get('message')}")
+        return
+
+    destination = itinerary_data.get("destination", "")
+    start_date = itinerary_data.get("start_date", "")
+    duration = itinerary_data.get("duration", 0)
+    st.subheader(f"🗺️ {destination} {duration} 天行程（{start_date} 起）")
+
+    # 逐日安排
+    days = itinerary_data.get("days", [])
+    for day in days:
+        acts = "、".join(day.get("attractions", [])) or "自由活动"
+        weather = day.get("weather", "")
+        title = f"第{day.get('day')}天（{day.get('date')}）"
+        if weather:
+            title += f"　{weather}"
+        with st.expander(title, expanded=(day.get("day") == 1)):
+            st.write(f"**推荐游览**：{acts}")
+
+    # 推荐酒店
+    hotels = itinerary_data.get("hotels", [])
+    if hotels:
+        st.markdown("**🏨 推荐酒店**")
+        for hotel in hotels[:3]:
+            rating = hotel.get("rating")
+            rating_str = f" ⭐{rating}" if rating else ""
+            price = hotel.get("price_per_night", "N/A")
+            st.write(f"- {hotel.get('hotel_name', '')}{rating_str}（参考 ¥{price}/晚）")
+
+
 def render_sidebar():
     """Render sidebar with settings and info."""
     with st.sidebar:
@@ -280,6 +313,8 @@ def render_chat_interface():
                     display_train_list(data)
                 elif intent == "hotel_booking":
                     display_hotel_list(data)
+                elif intent == "itinerary_planning":
+                    display_itinerary(data)
 
     # Chat input
     if prompt := st.chat_input("请输入您的问题..."):
@@ -320,6 +355,8 @@ def render_chat_interface():
                         display_train_list(actual_data)
                     elif intent == "hotel_booking":
                         display_hotel_list(actual_data)
+                    elif intent == "itinerary_planning":
+                        display_itinerary(actual_data)
 
                 # Add to history
                 st.session_state.messages.append({

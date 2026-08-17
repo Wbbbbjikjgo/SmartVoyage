@@ -20,6 +20,34 @@ from core.context_manager import context_manager
 # 获取日志记录器
 logger = logging.getLogger(__name__)
 
+
+def _format_itinerary(itin: Dict[str, Any]) -> str:
+    """把详细行程数据组装成可读的 Markdown 文本。"""
+    destination = itin.get("destination", "")
+    start_date = itin.get("start_date", "")
+    duration = itin.get("duration", 0)
+    days = itin.get("days", [])
+
+    lines = [f"已为您规划 **{destination}** {duration} 天行程（{start_date} 起）：\n"]
+    for day in days:
+        acts = "、".join(day.get("attractions", [])) or "自由活动"
+        weather = day.get("weather", "")
+        suffix = f"　{weather}" if weather else ""
+        lines.append(f"**第{day.get('day')}天（{day.get('date')}）**：{acts}{suffix}")
+
+    hotels = itin.get("hotels", [])
+    if hotels:
+        top_hotel = hotels[0]
+        hotel_name = top_hotel.get("hotel_name", "")
+        lines.append(f"\n推荐酒店：{hotel_name} 等 {len(hotels)} 家")
+
+    itinerary_id = itin.get("itinerary_id")
+    if itinerary_id:
+        lines.append(f"行程已保存，ID：{itinerary_id}")
+
+    return "\n".join(lines)
+
+
 # ================================================================
 # 1. 路由定义
 # ================================================================
@@ -167,10 +195,9 @@ async def chat(request: ChatRequest) -> ChatResponse:
             elif agent_name == "itinerary":
                 itinerary_data = data.get("data", {})
                 if itinerary_data.get("error"):
-                    message = f"抱歉，创建行程时出错：{itinerary_data.get('message')}"
+                    message = f"抱歉，规划行程时出错：{itinerary_data.get('message')}"
                 else:
-                    itinerary_id = itinerary_data.get("itinerary_id", "")
-                    message = f"行程已创建，行程ID：{itinerary_id}。"
+                    message = _format_itinerary(itinerary_data)
 
             else:
                 # 未知 Agent 的兜底回复

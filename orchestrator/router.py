@@ -76,7 +76,7 @@ class AgentRouter:
             IntentType.FLIGHT_BOOKING: "search_flights",      # 机票预订 → 搜索航班
             IntentType.TRAIN_BOOKING: "search_trains",        # 高铁/火车票 → 搜索车次
             IntentType.HOTEL_BOOKING: "search_hotels",        # 酒店预订 → 搜索酒店
-            IntentType.ITINERARY_PLANNING: "create_itinerary", # 行程规划 → 创建行程
+            IntentType.ITINERARY_PLANNING: "plan_trip",       # 行程规划 → 规划完整行程
         }
 
         # ============================================================
@@ -130,6 +130,7 @@ class AgentRouter:
             "search_trains": ["start", "end", "date", "is_high_speed"],       # 火车票：出发、到达、日期、是否高铁
             "search_hotels": ["location", "check_in", "check_out", "guests"], # 酒店：位置、入住、退房、人数
             "create_itinerary": ["user_id", "destination", "start_date", "duration", "budget"],  # 行程：用户ID、目的地、开始日期、天数、预算
+            "plan_trip": ["user_id", "destination", "start_date", "duration", "budget", "guests"],  # 完整行程规划
         }
 
     # ================================================================
@@ -217,7 +218,7 @@ class AgentRouter:
                     params["check_out"] = (date.today() + timedelta(days=3)).isoformat()
 
         # 技能：创建行程
-        if skill_name == "create_itinerary":
+        if skill_name in ("create_itinerary", "plan_trip"):
             if not params.get("start_date"):
                 params["start_date"] = tomorrow
                 params.setdefault("_defaults_used", []).append("start_date=明天")
@@ -306,8 +307,8 @@ class AgentRouter:
             }
 
         # -------- 3.8 设置默认用户ID --------
-        # 创建行程时需要 user_id，如果用户没提供，默认用 1（演示用户）
-        if skill_name == "create_itinerary" and "user_id" not in parameters:
+        # 创建行程/规划行程时需要 user_id，如果用户没提供，默认用 1（演示用户）
+        if skill_name in ("create_itinerary", "plan_trip") and "user_id" not in parameters:
             parameters["user_id"] = 1
 
         # -------- 3.9 移除内部元数据 --------

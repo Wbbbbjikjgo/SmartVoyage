@@ -1,11 +1,26 @@
 """Itinerary Agent - handles itinerary planning and management."""
 
 import logging
-from typing import Any, Dict, List
+from datetime import date, timedelta
+from typing import Any, Dict, List, Optional
 from .base_agent import BaseAgent, AgentCard, Skill
 from mcp_servers.db_mcp import db_mcp
+from mcp_servers.weather_mcp import weather_mcp
+from mcp_servers.hotel_mcp import hotel_mcp
 
 logger = logging.getLogger(__name__)
+
+
+def _format_day_weather(forecast: Optional[Dict[str, Any]]) -> str:
+    """将单日预报数据格式化为可读字符串。"""
+    if not forecast:
+        return ""
+    day = forecast.get("day_weather", "")
+    day_temp = forecast.get("day_temp", "")
+    night_temp = forecast.get("night_temp", "")
+    if day_temp or night_temp:
+        return f"{day} {night_temp}~{day_temp}°C".strip()
+    return day
 
 
 class ItineraryAgent(BaseAgent):
@@ -21,6 +36,9 @@ class ItineraryAgent(BaseAgent):
 
         self.register_skill(
             Skill(name="create_itinerary", description="创建新行程", tags=["itinerary", "planning"])
+        )
+        self.register_skill(
+            Skill(name="plan_trip", description="规划完整行程（天气+景点+酒店+逐日安排）", tags=["itinerary", "planning"])
         )
         self.register_skill(
             Skill(name="get_user_itineraries", description="获取用户的所有行程", tags=["itinerary", "list"])
@@ -78,6 +96,111 @@ class ItineraryAgent(BaseAgent):
             duration=duration,
             budget=budget,
         )
+
+    async def skill_plan_trip(
+        self,
+        user_id: int,
+        destination: str,
+        start_date: str,
+        duration: int,
+        budget: float = None,
+        guests: int = 1,
+    ) -> Dict[str, Any]:
+        """规划完整行程：天气 + 景点 + 酒店 + 逐日安排，并持久化到数据库。
+
+        Args:
+            user_id: 用户 ID。
+            destination: 目的地城市。
+            start_date: 出发日期（YYYY-MM-DD）。
+            duration: 行程天数。
+            budget: 预算（可选）。
+            guests: 人数。
+
+        Returns:
+            包含逐日安排、天气、景点、酒店的详细行程。
+        """
+        # 1. 天气预报（高德，最多 4 天）
+        weather = await weather_mcp.get_forecast(destination, min(duration, 4))
+
+        # 2. 景点（高德 POI，按天数放大数量）
+        attractions = await hotel_mcp.search_attractions(
+            destination, limit=max(duration * 3, 6)
+        )
+
+        # 3. 酒店
+        try:
+            check_out = (date.fromisoformat(start_date) + timedelta(days=duration)).isoformat()
+        except ValueError:
+            check_out = ""
+        hotels = await hotel_mcp.search_hotels(
+            destination, start_date, check_out, guests
+        )
+
+        # 4. 创建行程记录（持久化）
+        itinerary = await db_mcp.create_itinerary(
+            user_id=user_id,
+            destination=destination,
+            start_date=start_date,
+            duration=duration,
+            budget=budget,
+        )
+
+        # 5. 生成逐日安排
+        days = self._build_day_plan(start_date, duration, weather, attractions)
+
+        return {
+            "itinerary_id": itinerary.get("itinerary_id"),
+            "destination": destination,
+            "start_date": start_date,
+            "duration": duration,
+            "budget": budget,
+            "weather": weather if not weather.get("error") else None,
+            "attractions": attractions.get("attractions", [])
+            if not attractions.get("error")
+            else [],
+            "hotels": hotels.get("hotels", []) if not hotels.get("error") else [],
+            "days": days,
+        }
+
+    def _build_day_plan(
+        self,
+        start_date: str,
+        duration: int,
+        weather: Dict[str, Any],
+        attractions: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        """根据天气和景点，把行程拆成逐日安排（按天均分景点）。"""
+        try:
+            start = date.fromisoformat(start_date)
+        except ValueError:
+            start = date.today()
+
+        forecasts = (weather or {}).get("forecast", [])
+        names = [
+            a.get("name")
+            for a in attractions.get("attractions", [])
+            if isinstance(a, dict) and a.get("name")
+        ]
+
+        days = []
+        per_day = max(1, len(names) // max(duration, 1))
+        idx = 0
+        for d in range(duration):
+            day_forecast = forecasts[d] if d < len(forecasts) else None
+            day_attractions = names[idx : idx + per_day]
+            idx += per_day
+            days.append({
+                "day": d + 1,
+                "date": (start + timedelta(days=d)).isoformat(),
+                "weather": _format_day_weather(day_forecast),
+                "attractions": day_attractions,
+            })
+
+        # 剩余未分配的景点并入最后一天
+        if idx < len(names) and days:
+            days[-1]["attractions"].extend(names[idx:])
+
+        return days
 
     async def skill_get_user_itineraries(self, user_id: int) -> Dict[str, Any]:
         """获取用户的所有行程。"""
