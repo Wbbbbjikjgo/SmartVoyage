@@ -104,7 +104,8 @@ class IntentRecognizer:
                 slots={},
             )
         except Exception as e:
-            logger.exception(f"Error recognizing intent: {e}")
+            # LLM 不可用（如余额不足/网络故障）时，降级为规则识别，只记一条简洁告警
+            logger.warning(f"LLM 意图识别不可用，将降级为规则识别: {e}")
             return IntentResult(
                 intent=IntentType.GENERAL_QA,
                 confidence=0.0,
