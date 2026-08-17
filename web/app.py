@@ -228,6 +228,10 @@ def display_itinerary(itinerary_data: Dict[str, Any]):
     duration = itinerary_data.get("duration", 0)
     st.subheader(f"🗺️ {destination} {duration} 天行程（{start_date} 起）")
 
+    summary = itinerary_data.get("summary")
+    if summary:
+        st.markdown(summary)
+
     # 逐日安排
     days = itinerary_data.get("days", [])
     for day in days:
@@ -238,6 +242,14 @@ def display_itinerary(itinerary_data: Dict[str, Any]):
             title += f"　{weather}"
         with st.expander(title, expanded=(day.get("day") == 1)):
             st.write(f"**推荐游览**：{acts}")
+            plan = day.get("plan")
+            if plan:
+                st.write(plan)
+
+    # 交通建议
+    transport = itinerary_data.get("transport_recommendation")
+    if transport:
+        st.markdown(f"**🚗 交通建议**：{transport}")
 
     # 推荐酒店
     hotels = itinerary_data.get("hotels", [])

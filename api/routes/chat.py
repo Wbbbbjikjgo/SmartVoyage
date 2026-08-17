@@ -28,18 +28,30 @@ def _format_itinerary(itin: Dict[str, Any]) -> str:
     duration = itin.get("duration", 0)
     days = itin.get("days", [])
 
-    lines = [f"已为您规划 **{destination}** {duration} 天行程（{start_date} 起）：\n"]
+    lines = [f"已为您规划 **{destination}** {duration} 天行程（{start_date} 起）："]
+
+    summary = itin.get("summary")
+    if summary:
+        lines.append(f"\n{summary}")
+
     for day in days:
         acts = "、".join(day.get("attractions", [])) or "自由活动"
         weather = day.get("weather", "")
         suffix = f"　{weather}" if weather else ""
-        lines.append(f"**第{day.get('day')}天（{day.get('date')}）**：{acts}{suffix}")
+        lines.append(f"\n**第{day.get('day')}天（{day.get('date')}）**：{acts}{suffix}")
+        plan = day.get("plan")
+        if plan:
+            lines.append(f"　· {plan}")
 
     hotels = itin.get("hotels", [])
     if hotels:
         top_hotel = hotels[0]
         hotel_name = top_hotel.get("hotel_name", "")
         lines.append(f"\n推荐酒店：{hotel_name} 等 {len(hotels)} 家")
+
+    transport = itin.get("transport_recommendation")
+    if transport:
+        lines.append(f"交通建议：{transport}")
 
     itinerary_id = itin.get("itinerary_id")
     if itinerary_id:
