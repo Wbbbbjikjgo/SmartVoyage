@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
 SERVICES: List[Tuple[str, str]] = [
     ("registry", "registry.server"),
@@ -50,6 +51,19 @@ def _env() -> Dict[str, str]:
     return env
 
 
+def _init_database() -> None:
+    """Create tables and the default user before starting services."""
+    try:
+        from models.database import close_db, init_db, seed_default_user
+
+        init_db()
+        seed_default_user()
+        close_db()
+        print("[init] MySQL 表结构与默认用户已就绪")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[warn] MySQL 初始化失败，Itinerary Agent 将返回明确数据库错误: {exc}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Start SmartVoyage services")
     parser.add_argument(
@@ -71,6 +85,8 @@ def main() -> None:
 
     env = _env()
     processes: Dict[str, subprocess.Popen] = {}
+
+    _init_database()
 
     try:
         for name, module in selected:
