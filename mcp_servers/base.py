@@ -11,6 +11,8 @@ from typing import Any, Dict, Optional
 
 import httpx
 
+from configs.settings import settings
+
 logger = logging.getLogger(__name__)
 
 
@@ -46,7 +48,7 @@ class BaseMCPServer:
     async def _get_client(self) -> httpx.AsyncClient:
         """Return a lazily-initialized async HTTP client."""
         if self._client is None or self._client.is_closed:
-            self._client = httpx.AsyncClient(timeout=20.0)
+            self._client = httpx.AsyncClient(timeout=settings.mcp_http_timeout)
         return self._client
 
     async def close(self) -> None:

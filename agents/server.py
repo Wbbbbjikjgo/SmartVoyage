@@ -43,6 +43,8 @@ def serve_agent(
     port: int,
 ) -> None:
     """Start the A2A HTTP server and register the agent in the registry."""
+    settings.log_credential_status()
+
     request_handler = DefaultRequestHandler(
         agent_executor=executor,
         task_store=InMemoryTaskStore(),

@@ -24,6 +24,7 @@ async def lifespan(app: FastAPI):
     logger.info(f"Registry: {settings.registry_url}")
     logger.info("Agents: %s", settings.agent_base_urls)
     logger.info("数据库由 Itinerary Agent 通过 db MCP Server 管理")
+    settings.log_credential_status()
 
     yield
 
