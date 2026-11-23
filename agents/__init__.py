@@ -1,19 +1,17 @@
-"""A2A Agent module for SmartVoyage."""
+"""A2A Agents for SmartVoyage.
 
-from .base_agent import BaseAgent, AgentCard, Skill
-from .weather_agent import WeatherAgent
-from .flight_agent import FlightAgent
-from .hotel_agent import HotelAgent
-from .train_agent import TrainAgent
-from .itinerary_agent import ItineraryAgent
+每个子包都是一个独立的 A2A HTTP 服务：
 
-__all__ = [
-    "BaseAgent",
-    "AgentCard",
-    "Skill",
-    "WeatherAgent",
-    "FlightAgent",
-    "HotelAgent",
-    "TrainAgent",
-    "ItineraryAgent",
-]
+    python -m agents.weather
+    python -m agents.flight
+    python -m agents.train
+    python -m agents.hotel
+    python -m agents.itinerary
+
+Agent 内部使用自己的大模型 + 真实 MCP 工具；Agent 之间只通过 A2A HTTP URL
+通信，不再进行进程内直接调用。
+"""
+
+from .base_executor import ToolAwareAgentExecutor
+
+__all__ = ["ToolAwareAgentExecutor"]
