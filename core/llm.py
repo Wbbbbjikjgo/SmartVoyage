@@ -22,7 +22,13 @@ def get_chat_llm(temperature: float = 0.1) -> ChatOpenAI:
 
     Returns:
         已配置的 ChatOpenAI 客户端。
+
+    Raises:
+        RuntimeError: 当未配置 ``OPENAI_API_KEY`` 时抛出明确错误。
     """
+    if not settings.openai_api_key:
+        raise RuntimeError("缺少 OPENAI_API_KEY，请在 .env 中配置真实的 LLM API Key")
+
     return ChatOpenAI(
         model=settings.openai_model,
         api_key=settings.openai_api_key,

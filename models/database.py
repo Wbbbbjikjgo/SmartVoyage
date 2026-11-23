@@ -18,9 +18,11 @@ from sqlalchemy import (
     ForeignKey,             # 外键约束
     Text,                   # 长文本类型
 )
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, Session, relationship
+from sqlalchemy.orm import sessionmaker, Session, relationship, declarative_base
 from configs.settings import settings
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 # ================================================================
@@ -236,7 +238,7 @@ def init_db():
     # Base.metadata.create_all：根据所有模型定义创建表
     # bind=engine：指定使用哪个引擎
     Base.metadata.create_all(bind=engine)
-    print(f"数据库初始化成功: {settings.mysql_database}")
+    logger.info("数据库初始化成功: %s", settings.mysql_database)
 
 
 def seed_default_user():
@@ -258,7 +260,7 @@ def seed_default_user():
             )
             session.add(user)  # 添加到会话
             session.commit()   # 提交事务（真正写入数据库）
-            print("默认演示用户已创建 (user_id=1)")
+            logger.info("默认演示用户已创建 (user_id=1)")
         return user.user_id  # 返回用户ID
     finally:
         session.close()  # 关闭会话
@@ -275,4 +277,4 @@ def close_db():
         _engine.dispose()
         _engine = None
         _SessionLocal = None
-        print("数据库连接已关闭")
+        logger.info("数据库连接已关闭")

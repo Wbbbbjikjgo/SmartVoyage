@@ -3,9 +3,8 @@
 import json
 import logging
 from typing import Dict, Any, Optional
-from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
-from configs.settings import settings
+from core.llm import get_chat_llm
 from models.schemas import IntentType, IntentResult
 
 logger = logging.getLogger(__name__)
@@ -15,14 +14,7 @@ class IntentRecognizer:
     """Recognizes user intent from natural language input."""
 
     def __init__(self):
-        """Initialize intent recognizer with LLM."""
-        self.llm = ChatOpenAI(
-            model=settings.openai_model,
-            api_key=settings.openai_api_key,
-            base_url=settings.openai_base_url,
-            temperature=0.1,
-        )
-
+        """Initialize intent recognizer."""
         # Intent recognition prompt
         self.prompt = ChatPromptTemplate.from_messages([
             ("system", """你是一个智能旅行助手的意图识别模块。你的任务是分析用户的输入，识别用户的意图类型，并提取关键信息（槽位）。
@@ -66,8 +58,9 @@ class IntentRecognizer:
             # Format prompt
             messages = self.prompt.format_messages(input=user_input)
 
-            # Call LLM
-            response = await self.llm.ainvoke(messages)
+            # Call LLM（缺少 Key 时会抛出明确错误，随后降级为规则识别）
+            llm = get_chat_llm(temperature=0.1)
+            response = await llm.ainvoke(messages)
             content = response.content.strip()
 
             # Parse JSON response
