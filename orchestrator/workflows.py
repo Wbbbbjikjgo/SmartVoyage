@@ -1,514 +1,196 @@
-"""
-多 Agent 协同工作流定义 - 旅行规划工作流
+"""Multi-Agent travel planning workflow.
 
-核心功能：协调多个 Agent 协作完成一个完整的旅行规划任务
-工作流程：查天气 → 查机票 → 查酒店 → 创建行程 → 添加预订
+主 Agent 依次通过 A2A HTTP 调用天气 / 酒店 / 航班 / 火车票 Agent，收集真实
+数据后，把这些真实数据交给行程 Agent，由其大模型生成逐日计划并写入数据库。
+
+所有 Agent 都运行在独立进程中，只能通过 URL 访问，不存在进程内直接调用。
 """
 
 import logging
-from typing import Dict, Any, Optional
-from datetime import date, timedelta
-from orchestrator.agent_network import agent_network
-from core.itinerary_planner import itinerary_planner
+from typing import Any, Dict, List, Optional
 
-# 获取日志记录器
+from configs.settings import settings
+from orchestrator.a2a_client import call_agent
+from orchestrator.agent_directory import resolve_agent_url
+
 logger = logging.getLogger(__name__)
 
 
-# ================================================================
-# 1. 旅行规划工作流类
-# ================================================================
-
 class TravelPlanningWorkflow:
-    """
-    旅行规划工作流
+    """Coordinate multiple remote A2A agents to build a real trip plan."""
 
-    作用：把多个 Agent 串起来，完成一个完整的旅行规划
-    涉及 Agent：
-        1. weather Agent - 查询目的地天气
-        2. flight Agent - 搜索机票
-        3. hotel Agent - 搜索酒店
-        4. itinerary Agent - 创建行程和预订
+    async def _ask(self, agent_name: str, prompt: str) -> str:
+        """Send a prompt to a remote agent and return its text answer."""
+        url = await resolve_agent_url(agent_name)
+        if not url:
+            raise RuntimeError(f"未找到 Agent「{agent_name}」的 URL")
+        return await call_agent(url, prompt, timeout=settings.a2a_timeout)
 
-    流程：天气 → 机票 → 酒店 → 创建行程 → 添加预订
-    """
-
-    def __init__(self):
-        """初始化工作流，引用 Agent 网络"""
-        # agent_network：管理所有 Agent 的注册和调用
-        self.network = agent_network
-
-    # ================================================================
-    # 2. 工具方法：解包 Agent 返回结果
-    # ================================================================
-
-    @staticmethod
-    def _unwrap(result: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        解包 Agent 技能调用结果
-
-        问题：Agent 返回的格式是 {"success": True, "data": {...}}
-        但我们真正想要的是 data 里面的内容
-
-        这个方法把外面的壳剥掉，直接返回内部数据
-
-        示例：
-            输入: {"success": True, "data": {"flights": [...]}}
-            输出: {"flights": [...]}
-
-            输入: {"error": True, "message": "出错了"}
-            输出: {"error": True, "message": "出错了"}  # 错误情况直接返回
-
-        Args:
-            result: Agent 返回的原始结果
-
-        Returns:
-            解包后的数据
-        """
-        # 如果有错误标记，直接返回（不要解包）
-        if result.get("error"):
-            return result
-        # 如果成功且有 data 字段且 data 是字典，返回 data
-        if result.get("success") and isinstance(result.get("data"), dict):
-            return result["data"]
-        # 其他情况直接返回原结果
-        return result
-
-    # ================================================================
-    # 3. 主要方法：执行完整旅行规划
-    # ================================================================
+    async def _step(
+        self,
+        steps: List[Dict[str, Any]],
+        agent_name: str,
+        prompt: str,
+        label: Optional[str] = None,
+    ) -> str:
+        """Execute one remote-agent step, recording success or explicit error."""
+        step_name = label or agent_name
+        try:
+            answer = await self._ask(agent_name, prompt)
+            steps.append({
+                "step": step_name,
+                "agent": agent_name,
+                "status": "success",
+                "answer": answer,
+            })
+            return answer
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("旅行工作流步骤失败: %s", step_name)
+            steps.append({
+                "step": step_name,
+                "agent": agent_name,
+                "status": "error",
+                "answer": str(exc),
+            })
+            return ""
 
     async def execute(
         self,
-        user_id: int,               # 用户ID
-        destination: str,           # 目的地城市（如 "北京"）
-        start_date: str,            # 开始日期（如 "2024-08-20"）
-        duration: int,              # 持续天数（如 3）
-        departure: str = None,      # 出发城市（可选，如 "上海"）
-        budget: float = None,       # 预算（可选）
-        guests: int = 1,            # 人数（默认1人）
+        user_id: int,
+        destination: str,
+        start_date: str,
+        duration: int,
+        departure: Optional[str] = None,
+        budget: Optional[float] = None,
+        guests: int = 1,
+        user_input: str = "",
     ) -> Dict[str, Any]:
-        """
-        执行完整的旅行规划工作流
+        """Run the full multi-agent planning workflow."""
+        steps: List[Dict[str, Any]] = []
+        forecast_days = max(1, min(int(duration or 1), 4))
 
-        流程：
-            1. 查询目的地天气
-            2. 搜索机票（如果提供了出发城市）
-            3. 搜索酒店
-            4. 创建行程
-            5. 添加机票预订（如果有航班）
-            6. 添加酒店预订（如果有酒店）
+        # 1. 天气 Agent —— 真实天气预报
+        weather_text = await self._step(
+            steps,
+            "weather",
+            f"请查询「{destination}」未来 {forecast_days} 天的真实天气预报。"
+            f"请只使用工具返回的真实数据，不要编造。",
+        )
 
-        Args:
-            user_id: 用户ID
-            destination: 目的地
-            start_date: 开始日期
-            duration: 持续天数
-            departure: 出发城市（可选）
-            budget: 预算（可选）
-            guests: 人数
+        # 2. 酒店 Agent —— 真实酒店
+        hotel_text = await self._step(
+            steps,
+            "hotel",
+            f"请搜索「{destination}」的真实酒店（约 {max(duration * 3, 6)} 家），"
+            f"入住人数 {guests} 人。请只使用工具返回的真实数据。",
+            label="hotels",
+        )
 
-        Returns:
-            完整的行程结果，包含天气、航班、酒店、预订信息
-        """
-        # -------- 准备结果容器 --------
-        result = {
-            "destination": destination,      # 目的地
-            "start_date": start_date,        # 开始日期
-            "duration": duration,            # 持续天数
-            "budget": budget,                # 预算
-            "guests": guests,                # 人数
-            "steps": [],                     # 记录每一步的执行结果
-            "attractions": [],               # 景点列表
-            "hotels": [],                    # 酒店列表
-            "flights": [],                   # 航班列表
-            "trains": [],                    # 车次列表
+        # 3. 酒店 Agent —— 真实景点
+        attraction_text = await self._step(
+            steps,
+            "hotel",
+            f"请搜索「{destination}」的真实热门景点（约 {max(duration * 3, 6)} 个）。"
+            f"请只使用工具返回的真实数据。",
+            label="attractions",
+        )
+
+        # 4. 交通 Agent —— 仅在提供出发城市时查询
+        flight_text = ""
+        train_text = ""
+        if departure:
+            flight_text = await self._step(
+                steps,
+                "flight",
+                f"请查询 {start_date} 从「{departure}」到「{destination}」的真实航班，"
+                f"乘客 {guests} 人。请只使用工具返回的真实数据。",
+                label="flights",
+            )
+            train_text = await self._step(
+                steps,
+                "train",
+                f"请查询 {start_date} 从「{departure}」到「{destination}」的真实高铁/火车票。"
+                f"请只使用工具返回的真实数据。",
+                label="trains",
+            )
+
+        # 5. 行程 Agent —— 基于真实数据生成逐日计划并写入数据库
+        budget_line = f"预算：{budget} 元" if budget else "预算：未指定"
+        itinerary_prompt = (
+            f"用户原始请求：{user_input or '规划一次旅行'}\n"
+            f"行程参数：目的地={destination}，开始日期={start_date}，天数={duration}，"
+            f"人数={guests}，出发地={departure or '未指定'}，{budget_line}，user_id={user_id}\n\n"
+            "以下是其他 Agent 通过真实接口获取的数据（严禁编造或替换）：\n"
+            f"【天气】\n{weather_text or '（天气数据不可用）'}\n\n"
+            f"【酒店】\n{hotel_text or '（酒店数据不可用）'}\n\n"
+            f"【景点】\n{attraction_text or '（景点数据不可用）'}\n\n"
+            f"【航班】\n{flight_text or '（未查询或航班数据不可用）'}\n\n"
+            f"【车次】\n{train_text or '（未查询或车次数据不可用）'}\n\n"
+            f"请根据以上真实数据生成 {duration} 天逐日行程（每天包含时间段、景点、"
+            "交通方式、天气提示）。生成后请调用 create_itinerary 工具把行程保存到数据库"
+            f"（user_id={user_id}，destination={destination}，start_date={start_date}，"
+            f"duration={duration}，budget={budget}）。"
+            f"如果 get_user 显示 user_id={user_id} 不存在，请先调用 create_user 创建用户"
+            f"（name=SmartVoyage 用户，email=user{user_id}@smartvoyage.local），"
+            "再用返回的 user_id 创建行程。如果数据库写入失败，如实说明错误，"
+            "但仍然完整输出行程。"
+        )
+
+        answer = await self._step(steps, "itinerary", itinerary_prompt)
+
+        return {
+            "success": bool(answer),
+            "destination": destination,
+            "start_date": start_date,
+            "duration": duration,
+            "departure": departure,
+            "budget": budget,
+            "guests": guests,
+            "answer": answer or "行程 Agent 未返回结果，请检查该 Agent 服务与日志。",
+            "steps": steps,
+            "weather": weather_text,
+            "hotels": hotel_text,
+            "attractions": attraction_text,
+            "flights": flight_text,
+            "trains": train_text,
         }
 
-        try:
-            # ============================================================
-            # 步骤1：查询天气
-            # ============================================================
-            logger.info(f"步骤1: 查询 {destination} 的天气")
-            weather_result = await self.network.invoke_agent(
-                "weather",                    # Agent 名称
-                "get_forecast",               # 技能名称：获取天气预报
-                {
-                    "location": destination,
-                    "days": min(duration, 4),  # 高德最多返回未来 4 天
-                },
-            )
-            # 解包结果
-            weather_result = self._unwrap(weather_result)
-            # 记录执行步骤
-            result["steps"].append({
-                "step": "weather",                                     # 步骤名称
-                "status": "success" if not weather_result.get("error") else "error",
-                "data": weather_result,                                # 步骤数据
-            })
-            result["weather"] = weather_result  # 存到结果中
-
-            # ============================================================
-            # 步骤2：搜索景点
-            # ============================================================
-            logger.info(f"步骤2: 搜索 {destination} 的景点")
-            attraction_result = await self.network.invoke_agent(
-                "hotel",                     # 景点技能挂载在 hotel Agent 上
-                "search_attractions",
-                {
-                    "location": destination,
-                    "limit": max(duration * 3, 6),  # 按天数放大数量
-                },
-            )
-            attraction_result = self._unwrap(attraction_result)
-            result["steps"].append({
-                "step": "attractions",
-                "status": "success" if not attraction_result.get("error") else "error",
-                "data": attraction_result,
-            })
-            result["attractions"] = (
-                attraction_result.get("attractions", [])
-                if not attraction_result.get("error")
-                else []
-            )
-
-            # ============================================================
-            # 步骤3：搜索航班（只有用户提供了出发城市才执行）
-            # ============================================================
-            if departure:
-                logger.info(f"步骤3: 搜索从 {departure} 到 {destination} 的航班")
-                flight_result = await self.network.invoke_agent(
-                    "flight",                    # Agent 名称
-                    "search_flights",            # 技能名称：搜索航班
-                    {
-                        "departure": departure,
-                        "arrival": destination,
-                        "date": start_date,
-                        "passengers": guests,
-                    },
-                )
-                flight_result = self._unwrap(flight_result)
-                result["steps"].append({
-                    "step": "flights",
-                    "status": "success" if not flight_result.get("error") else "error",
-                    "data": flight_result,
-                })
-                result["flights"] = (
-                    flight_result.get("flights", [])
-                    if not flight_result.get("error")
-                    else []
-                )
-
-                # ============================================================
-                # 步骤4：搜索高铁/火车票（有出发城市时一并查，供大模型参考）
-                # ============================================================
-                logger.info(f"步骤4: 搜索从 {departure} 到 {destination} 的火车票")
-                train_result = await self.network.invoke_agent(
-                    "train",
-                    "search_trains",
-                    {
-                        "start": departure,
-                        "end": destination,
-                        "date": start_date,
-                        "is_high_speed": 0,
-                    },
-                )
-                train_result = self._unwrap(train_result)
-                result["steps"].append({
-                    "step": "trains",
-                    "status": "success" if not train_result.get("error") else "error",
-                    "data": train_result,
-                })
-                result["trains"] = (
-                    train_result.get("trains", [])
-                    if not train_result.get("error")
-                    else []
-                )
-
-            # ============================================================
-            # 步骤5：搜索酒店
-            # ============================================================
-            # 计算退房日期：入住日期 + 入住天数
-            # 例如：8月20日入住，住3天，8月23日退房
-            start = date.fromisoformat(start_date)           # 将日期字符串转为 date 对象
-            check_out = start + timedelta(days=duration)     # 计算退房日期
-            check_out_str = check_out.isoformat()            # 转回字符串
-
-            logger.info(f"步骤5: 搜索 {destination} 的酒店")
-            hotel_result = await self.network.invoke_agent(
-                "hotel",                     # Agent 名称
-                "search_hotels",             # 技能名称：搜索酒店
-                {
-                    "location": destination,
-                    "check_in": start_date,
-                    "check_out": check_out_str,
-                    "guests": guests,
-                },
-            )
-            hotel_result = self._unwrap(hotel_result)
-            result["steps"].append({
-                "step": "hotels",
-                "status": "success" if not hotel_result.get("error") else "error",
-                "data": hotel_result,
-            })
-            result["hotels"] = (
-                hotel_result.get("hotels", [])
-                if not hotel_result.get("error")
-                else []
-            )
-
-            # ============================================================
-            # 步骤6：创建行程（写入数据库）
-            # ============================================================
-            logger.info(f"步骤6: 为用户 {user_id} 创建行程")
-            itinerary_result = await self.network.invoke_agent(
-                "itinerary",                 # Agent 名称
-                "create_itinerary",          # 技能名称：创建行程
-                {
-                    "user_id": user_id,
-                    "destination": destination,
-                    "start_date": start_date,
-                    "duration": duration,
-                    "budget": budget,
-                },
-            )
-            itinerary_result = self._unwrap(itinerary_result)
-            result["steps"].append({
-                "step": "create_itinerary",
-                "status": "success" if not itinerary_result.get("error") else "error",
-                "data": itinerary_result,
-            })
-
-            # ============================================================
-            # 步骤7：添加机票/酒店预订（创建行程成功后）
-            # ============================================================
-            if not itinerary_result.get("error"):
-                # 获取行程ID（创建行程后返回的）
-                itinerary_id = itinerary_result["itinerary_id"]
-                result["itinerary_id"] = itinerary_id
-
-                # 有出发城市且有航班时，选择第一个航班（最优）添加机票预订
-                if departure and result["flights"]:
-                    selected_flight = result["flights"][0]
-                    booking_result = await self.network.invoke_agent(
-                        "itinerary",
-                        "add_booking",          # 技能名称：添加预订
-                        {
-                            "itinerary_id": itinerary_id,
-                            "booking_type": "flight",
-                            "details": {
-                                "flight_no": selected_flight.get("flight_no"),
-                                "airline": selected_flight.get("airline"),
-                                "departure": selected_flight.get("departure"),
-                                "arrival": selected_flight.get("arrival"),
-                                "departure_time": selected_flight.get("departure_time"),
-                                "arrival_time": selected_flight.get("arrival_time"),
-                                "price": selected_flight.get("price"),
-                            },
-                        },
-                    )
-                    booking_result = self._unwrap(booking_result)
-                    result["steps"].append({
-                        "step": "book_flight",
-                        "status": "success" if not booking_result.get("error") else "error",
-                        "data": booking_result,
-                    })
-
-                # 有酒店时，选择第一个酒店（最优）添加酒店预订
-                if result["hotels"]:
-                    selected_hotel = result["hotels"][0]
-                    booking_result = await self.network.invoke_agent(
-                        "itinerary",
-                        "add_booking",
-                        {
-                            "itinerary_id": itinerary_id,
-                            "booking_type": "hotel",
-                            "details": {
-                                "hotel_name": selected_hotel.get("hotel_name"),
-                                "location": selected_hotel.get("location")
-                                or selected_hotel.get("district"),
-                                "price_per_night": selected_hotel.get("price_per_night"),
-                                "rating": selected_hotel.get("rating"),
-                            },
-                        },
-                    )
-                    booking_result = self._unwrap(booking_result)
-                    result["steps"].append({
-                        "step": "book_hotel",
-                        "status": "success" if not booking_result.get("error") else "error",
-                        "data": booking_result,
-                    })
-
-            # ============================================================
-            # 步骤8：把真实数据交给大模型，生成逐日计划
-            # ============================================================
-            logger.info(f"步骤8: 由大模型生成 {destination} 的逐日计划")
-            plan = await itinerary_planner.plan(
-                meta={
-                    "destination": destination,
-                    "start_date": start_date,
-                    "duration": duration,
-                    "budget": budget,
-                    "guests": guests,
-                    "departure": departure,
-                },
-                weather=result["weather"],
-                attractions=result["attractions"],
-                hotels=result["hotels"],
-                flights=result["flights"],
-                trains=result["trains"],
-            )
-            result["summary"] = plan.get("summary", "")
-            result["hotel_recommendation"] = plan.get("hotel_recommendation", "")
-            result["transport_recommendation"] = plan.get("transport_recommendation", "")
-            result["days"] = plan.get("days", [])
-
-            # 标记整体成功
-            result["success"] = True
-
-        except Exception as e:
-            # 捕获任何异常，记录错误
-            logger.exception(f"旅行规划工作流执行出错: {e}")
-            result["success"] = False
-            result["error"] = str(e)
-            result["message"] = str(e)
-
-        return result
-
     # ================================================================
-    # 4. 简化工作流：只查天气
+    # 便捷方法
     # ================================================================
 
-    async def get_weather_only(self, location: str) -> Dict[str, Any]:
-        """
-        只查询天气（简化版工作流）
-
-        使用场景：用户只想查天气，不需要完整行程
-
-        Args:
-            location: 城市名
-
-        Returns:
-            天气数据
-        """
-        return await self.network.invoke_agent(
-            "weather",
-            "get_current_weather",       # 获取当前天气（不是预报）
-            {"location": location},
-        )
-
-    # ================================================================
-    # 5. 简化工作流：只查航班
-    # ================================================================
+    async def get_weather_only(self, location: str) -> str:
+        """Query only the weather agent."""
+        return await self._ask("weather", f"请查询「{location}」的真实实况天气。")
 
     async def search_flights_only(
-        self,
-        departure: str,      # 出发城市
-        arrival: str,        # 到达城市
-        date: str,           # 日期
-        passengers: int = 1, # 人数
-    ) -> Dict[str, Any]:
-        """
-        只搜索航班（简化版工作流）
-
-        使用场景：用户只想查航班，不需要完整行程
-
-        Args:
-            departure: 出发城市
-            arrival: 到达城市
-            date: 出行日期
-            passengers: 人数
-
-        Returns:
-            航班搜索结果
-        """
-        return await self.network.invoke_agent(
+        self, departure: str, arrival: str, date: str, passengers: int = 1
+    ) -> str:
+        """Query only the flight agent."""
+        return await self._ask(
             "flight",
-            "search_flights",
-            {
-                "departure": departure,
-                "arrival": arrival,
-                "date": date,
-                "passengers": passengers,
-            },
+            f"请查询 {date} 从「{departure}」到「{arrival}」的真实航班，乘客 {passengers} 人。",
         )
-
-    # ================================================================
-    # 6. 简化工作流：只查酒店
-    # ================================================================
 
     async def search_hotels_only(
-        self,
-        location: str,       # 位置/城市
-        check_in: str,       # 入住日期
-        check_out: str,      # 退房日期
-        guests: int = 2,     # 人数（默认2人）
-    ) -> Dict[str, Any]:
-        """
-        只搜索酒店（简化版工作流）
-
-        使用场景：用户只想查酒店，不需要完整行程
-
-        Args:
-            location: 城市名
-            check_in: 入住日期
-            check_out: 退房日期
-            guests: 人数
-
-        Returns:
-            酒店搜索结果
-        """
-        return await self.network.invoke_agent(
+        self, location: str, check_in: str, check_out: str, guests: int = 2
+    ) -> str:
+        """Query only the hotel agent."""
+        return await self._ask(
             "hotel",
-            "search_hotels",
-            {
-                "location": location,
-                "check_in": check_in,
-                "check_out": check_out,
-                "guests": guests,
-            },
+            f"请搜索「{location}」的真实酒店，入住 {check_in}，退房 {check_out}，"
+            f"入住人数 {guests} 人。",
         )
-
-    # ================================================================
-    # 7. 简化工作流：只查高铁/火车票
-    # ================================================================
 
     async def search_trains_only(
-        self,
-        start: str,               # 出发城市/车站
-        end: str,                 # 到达城市/车站
-        date: str = "",           # 出行日期
-        is_high_speed: int = 0,   # 是否仅高铁
-    ) -> Dict[str, Any]:
-        """
-        只搜索高铁/火车票（简化版工作流）
-
-        使用场景：用户只想查火车票，不需要完整行程
-
-        Args:
-            start: 出发城市/车站
-            end: 到达城市/车站
-            date: 出行日期
-            is_high_speed: 是否仅高铁
-
-        Returns:
-            火车票搜索结果
-        """
-        return await self.network.invoke_agent(
+        self, start: str, end: str, date: str = "", is_high_speed: int = 0
+    ) -> str:
+        """Query only the train agent."""
+        return await self._ask(
             "train",
-            "search_trains",
-            {
-                "start": start,
-                "end": end,
-                "date": date,
-                "is_high_speed": is_high_speed,
-            },
+            f"请查询 {date or '近期'} 从「{start}」到「{end}」的真实"
+            f"{'高铁' if is_high_speed else '火车'}票。",
         )
 
 
-# ================================================================
-# 8. 全局单例实例
-# ================================================================
-
-# 创建全局工作流实例，供其他模块导入使用
 travel_workflow = TravelPlanningWorkflow()
