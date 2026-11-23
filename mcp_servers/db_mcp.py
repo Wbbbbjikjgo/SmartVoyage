@@ -1,24 +1,34 @@
-"""Database MCP tool server for CRUD operations."""
+"""Database MCP Server (stdio) for real CRUD operations.
+
+启动方式::
+
+    python -m mcp_servers.db_mcp
+
+所有操作都直接读写本地 MySQL，不包含任何模拟数据。
+"""
 
 import logging
-from typing import Dict, Any, List, Optional
-from datetime import datetime, date
+from typing import Any, Dict, Optional
+
+from mcp.server.fastmcp import FastMCP
 from sqlalchemy.orm import Session
-from models.database import get_session_factory, User, Itinerary, Booking
+
+from mcp_servers.base import configure_stdio_logging, dump
+from models.database import Booking, Itinerary, User, get_session_factory
 
 logger = logging.getLogger(__name__)
+
+mcp = FastMCP("smartvoyage_db", log_level="ERROR")
 
 
 class DatabaseMCPServer:
     """MCP server for database operations."""
 
-    def __init__(self):
-        """Initialize database MCP server."""
-        self.name = "Database Tools"
-        self.description = "数据库操作工具集"
+    name = "Database Tools"
+    description = "数据库操作工具集（MySQL 真实数据）"
 
     def _get_session(self) -> Session:
-        """Get database session."""
+        """Get a database session."""
         SessionFactory = get_session_factory()
         return SessionFactory()
 
@@ -28,17 +38,7 @@ class DatabaseMCPServer:
         email: str,
         preferences: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """
-        Create a new user.
-
-        Args:
-            name: User name
-            email: User email
-            preferences: User preferences (optional)
-
-        Returns:
-            Created user data
-        """
+        """Create a new user."""
         try:
             session = self._get_session()
             try:
@@ -46,7 +46,6 @@ class DatabaseMCPServer:
                 session.add(user)
                 session.commit()
                 session.refresh(user)
-
                 return {
                     "user_id": user.user_id,
                     "name": user.name,
@@ -56,28 +55,18 @@ class DatabaseMCPServer:
                 }
             finally:
                 session.close()
-
-        except Exception as e:
-            logger.exception(f"Error creating user: {e}")
-            return {"error": True, "message": str(e)}
+        except Exception as exc:  # noqa: BLE001 - surfaced to the caller as JSON
+            logger.exception("Error creating user")
+            return {"error": True, "message": str(exc)}
 
     async def get_user(self, user_id: int) -> Dict[str, Any]:
-        """
-        Get user by ID.
-
-        Args:
-            user_id: User ID
-
-        Returns:
-            User data
-        """
+        """Get user by ID."""
         try:
             session = self._get_session()
             try:
                 user = session.query(User).filter(User.user_id == user_id).first()
                 if not user:
                     return {"error": True, "message": f"User not found: {user_id}"}
-
                 return {
                     "user_id": user.user_id,
                     "name": user.name,
@@ -87,10 +76,9 @@ class DatabaseMCPServer:
                 }
             finally:
                 session.close()
-
-        except Exception as e:
-            logger.exception(f"Error getting user: {e}")
-            return {"error": True, "message": str(e)}
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Error getting user")
+            return {"error": True, "message": str(exc)}
 
     async def create_itinerary(
         self,
@@ -100,20 +88,10 @@ class DatabaseMCPServer:
         duration: int,
         budget: Optional[float] = None,
     ) -> Dict[str, Any]:
-        """
-        Create a new itinerary.
-
-        Args:
-            user_id: User ID
-            destination: Destination city
-            start_date: Start date (YYYY-MM-DD)
-            duration: Duration in days
-            budget: Budget amount (optional)
-
-        Returns:
-            Created itinerary data
-        """
+        """Create a new itinerary."""
         try:
+            from datetime import date
+
             session = self._get_session()
             try:
                 itinerary = Itinerary(
@@ -127,7 +105,6 @@ class DatabaseMCPServer:
                 session.add(itinerary)
                 session.commit()
                 session.refresh(itinerary)
-
                 return {
                     "itinerary_id": itinerary.itinerary_id,
                     "user_id": itinerary.user_id,
@@ -140,21 +117,12 @@ class DatabaseMCPServer:
                 }
             finally:
                 session.close()
-
-        except Exception as e:
-            logger.exception(f"Error creating itinerary: {e}")
-            return {"error": True, "message": str(e)}
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Error creating itinerary")
+            return {"error": True, "message": str(exc)}
 
     async def get_user_itineraries(self, user_id: int) -> Dict[str, Any]:
-        """
-        Get all itineraries for a user.
-
-        Args:
-            user_id: User ID
-
-        Returns:
-            List of itineraries
-        """
+        """Get all itineraries for a user."""
         try:
             session = self._get_session()
             try:
@@ -164,7 +132,6 @@ class DatabaseMCPServer:
                     .order_by(Itinerary.created_at.desc())
                     .all()
                 )
-
                 result = []
                 for itin in itineraries:
                     result.append({
@@ -176,14 +143,12 @@ class DatabaseMCPServer:
                         "status": itin.status,
                         "created_at": itin.created_at.isoformat(),
                     })
-
                 return {"user_id": user_id, "itineraries": result, "total": len(result)}
             finally:
                 session.close()
-
-        except Exception as e:
-            logger.exception(f"Error getting itineraries: {e}")
-            return {"error": True, "message": str(e)}
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Error getting itineraries")
+            return {"error": True, "message": str(exc)}
 
     async def create_booking(
         self,
@@ -191,17 +156,7 @@ class DatabaseMCPServer:
         booking_type: str,
         details: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """
-        Create a new booking.
-
-        Args:
-            itinerary_id: Itinerary ID
-            booking_type: Booking type (flight/hotel/ticket)
-            details: Booking details
-
-        Returns:
-            Created booking data
-        """
+        """Create a new booking."""
         try:
             session = self._get_session()
             try:
@@ -214,7 +169,6 @@ class DatabaseMCPServer:
                 session.add(booking)
                 session.commit()
                 session.refresh(booking)
-
                 return {
                     "booking_id": booking.booking_id,
                     "itinerary_id": booking.itinerary_id,
@@ -225,21 +179,12 @@ class DatabaseMCPServer:
                 }
             finally:
                 session.close()
-
-        except Exception as e:
-            logger.exception(f"Error creating booking: {e}")
-            return {"error": True, "message": str(e)}
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Error creating booking")
+            return {"error": True, "message": str(exc)}
 
     async def get_itinerary_bookings(self, itinerary_id: int) -> Dict[str, Any]:
-        """
-        Get all bookings for an itinerary.
-
-        Args:
-            itinerary_id: Itinerary ID
-
-        Returns:
-            List of bookings
-        """
+        """Get all bookings for an itinerary."""
         try:
             session = self._get_session()
             try:
@@ -249,7 +194,6 @@ class DatabaseMCPServer:
                     .order_by(Booking.created_at.desc())
                     .all()
                 )
-
                 result = []
                 for booking in bookings:
                     result.append({
@@ -259,7 +203,6 @@ class DatabaseMCPServer:
                         "status": booking.status,
                         "created_at": booking.created_at.isoformat(),
                     })
-
                 return {
                     "itinerary_id": itinerary_id,
                     "bookings": result,
@@ -267,24 +210,14 @@ class DatabaseMCPServer:
                 }
             finally:
                 session.close()
-
-        except Exception as e:
-            logger.exception(f"Error getting bookings: {e}")
-            return {"error": True, "message": str(e)}
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Error getting bookings")
+            return {"error": True, "message": str(exc)}
 
     async def update_itinerary_status(
         self, itinerary_id: int, status: str
     ) -> Dict[str, Any]:
-        """
-        Update the status of an itinerary.
-
-        Args:
-            itinerary_id: Itinerary ID
-            status: New status (draft/confirmed/cancelled)
-
-        Returns:
-            Updated itinerary data
-        """
+        """Update the status of an itinerary."""
         valid_status = {"draft", "confirmed", "cancelled"}
         if status not in valid_status:
             return {"error": True, "message": f"非法状态: {status}"}
@@ -299,10 +232,8 @@ class DatabaseMCPServer:
                 )
                 if not itinerary:
                     return {"error": True, "message": f"Itinerary not found: {itinerary_id}"}
-
                 itinerary.status = status
                 session.commit()
-
                 return {
                     "itinerary_id": itinerary.itinerary_id,
                     "status": itinerary.status,
@@ -310,21 +241,12 @@ class DatabaseMCPServer:
                 }
             finally:
                 session.close()
-
-        except Exception as e:
-            logger.exception(f"Error updating itinerary status: {e}")
-            return {"error": True, "message": str(e)}
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Error updating itinerary status")
+            return {"error": True, "message": str(exc)}
 
     async def cancel_booking(self, booking_id: int) -> Dict[str, Any]:
-        """
-        Cancel a booking.
-
-        Args:
-            booking_id: Booking ID
-
-        Returns:
-            Cancelled booking data
-        """
+        """Cancel a booking."""
         try:
             session = self._get_session()
             try:
@@ -335,141 +257,101 @@ class DatabaseMCPServer:
                 )
                 if not booking:
                     return {"error": True, "message": f"Booking not found: {booking_id}"}
-
                 booking.status = "cancelled"
                 session.commit()
-
-                return {
-                    "booking_id": booking.booking_id,
-                    "status": booking.status,
-                }
+                return {"booking_id": booking.booking_id, "status": booking.status}
             finally:
                 session.close()
-
-        except Exception as e:
-            logger.exception(f"Error cancelling booking: {e}")
-            return {"error": True, "message": str(e)}
-
-    def get_tools(self) -> list:
-        """Get list of available tools."""
-        return [
-            {
-                "name": "create_user",
-                "description": "创建新用户",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "name": {"type": "string", "description": "用户姓名"},
-                        "email": {"type": "string", "description": "用户邮箱"},
-                        "preferences": {
-                            "type": "object",
-                            "description": "用户偏好",
-                        },
-                    },
-                    "required": ["name", "email"],
-                },
-            },
-            {
-                "name": "get_user",
-                "description": "获取用户信息",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "user_id": {"type": "integer", "description": "用户ID"},
-                    },
-                    "required": ["user_id"],
-                },
-            },
-            {
-                "name": "create_itinerary",
-                "description": "创建新行程",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "user_id": {"type": "integer", "description": "用户ID"},
-                        "destination": {"type": "string", "description": "目的地"},
-                        "start_date": {
-                            "type": "string",
-                            "description": "开始日期（YYYY-MM-DD）",
-                        },
-                        "duration": {"type": "integer", "description": "行程天数"},
-                        "budget": {"type": "number", "description": "预算"},
-                    },
-                    "required": ["user_id", "destination", "start_date", "duration"],
-                },
-            },
-            {
-                "name": "get_user_itineraries",
-                "description": "获取用户的所有行程",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "user_id": {"type": "integer", "description": "用户ID"},
-                    },
-                    "required": ["user_id"],
-                },
-            },
-            {
-                "name": "create_booking",
-                "description": "创建新预订",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "itinerary_id": {
-                            "type": "integer",
-                            "description": "行程ID",
-                        },
-                        "booking_type": {
-                            "type": "string",
-                            "description": "预订类型（flight/hotel/ticket）",
-                        },
-                        "details": {
-                            "type": "object",
-                            "description": "预订详情",
-                        },
-                    },
-                    "required": ["itinerary_id", "booking_type", "details"],
-                },
-            },
-            {
-                "name": "get_itinerary_bookings",
-                "description": "获取行程的所有预订",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "itinerary_id": {
-                            "type": "integer",
-                            "description": "行程ID",
-                        },
-                    },
-                    "required": ["itinerary_id"],
-                },
-            },
-            {
-                "name": "update_itinerary_status",
-                "description": "更新行程状态",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "itinerary_id": {"type": "integer", "description": "行程ID"},
-                        "status": {"type": "string", "description": "状态（draft/confirmed/cancelled）"},
-                    },
-                    "required": ["itinerary_id", "status"],
-                },
-            },
-            {
-                "name": "cancel_booking",
-                "description": "取消预订",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "booking_id": {"type": "integer", "description": "预订ID"},
-                    },
-                    "required": ["booking_id"],
-                },
-            },
-        ]
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Error cancelling booking")
+            return {"error": True, "message": str(exc)}
 
 
-# Global instance
-db_mcp = DatabaseMCPServer()
+db_server = DatabaseMCPServer()
+
+
+# ================================================================
+# MCP Tools
+# ================================================================
+
+@mcp.tool()
+async def create_user(
+    name: str, email: str, preferences: Optional[Dict[str, Any]] = None
+) -> str:
+    """创建新用户。"""
+    return dump(await db_server.create_user(name, email, preferences))
+
+
+@mcp.tool()
+async def get_user(user_id: int) -> str:
+    """获取用户信息。"""
+    return dump(await db_server.get_user(user_id))
+
+
+@mcp.tool()
+async def create_itinerary(
+    user_id: int,
+    destination: str,
+    start_date: str,
+    duration: int,
+    budget: Optional[float] = None,
+) -> str:
+    """创建新行程。
+
+    Args:
+        user_id: 用户 ID。
+        destination: 目的地城市。
+        start_date: 开始日期（YYYY-MM-DD）。
+        duration: 行程天数。
+        budget: 预算（可选）。
+    """
+    return dump(
+        await db_server.create_itinerary(
+            user_id, destination, start_date, duration, budget
+        )
+    )
+
+
+@mcp.tool()
+async def get_user_itineraries(user_id: int) -> str:
+    """获取用户的所有行程。"""
+    return dump(await db_server.get_user_itineraries(user_id))
+
+
+@mcp.tool()
+async def get_itinerary_bookings(itinerary_id: int) -> str:
+    """获取行程的所有预订。"""
+    return dump(await db_server.get_itinerary_bookings(itinerary_id))
+
+
+@mcp.tool()
+async def create_booking(
+    itinerary_id: int, booking_type: str, details: Dict[str, Any]
+) -> str:
+    """创建新预订。
+
+    Args:
+        itinerary_id: 行程 ID。
+        booking_type: 预订类型（flight/hotel/ticket）。
+        details: 预订详情。
+    """
+    return dump(
+        await db_server.create_booking(itinerary_id, booking_type, details)
+    )
+
+
+@mcp.tool()
+async def update_itinerary_status(itinerary_id: int, status: str) -> str:
+    """更新行程状态（draft/confirmed/cancelled）。"""
+    return dump(await db_server.update_itinerary_status(itinerary_id, status))
+
+
+@mcp.tool()
+async def cancel_booking(booking_id: int) -> str:
+    """取消预订。"""
+    return dump(await db_server.cancel_booking(booking_id))
+
+
+if __name__ == "__main__":
+    configure_stdio_logging()
+    mcp.run(transport="stdio")
