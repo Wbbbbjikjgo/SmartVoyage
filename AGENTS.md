@@ -20,12 +20,13 @@
 
 | 层级 | 技术 | 说明 |
 | --- | --- | --- |
-| 前端 | Streamlit | 对话式 UI，支持流式输出 |
-| API 网关 | FastAPI + Uvicorn | RESTful + A2A 协议承载 |
-| A2A 协议 | python-a2a | Agent 发现、通信、工作流 |
-| AI 编排 | LangChain | LLM 集成、工具调用 |
-| LLM | DeepSeek（兼容 OpenAI 格式） | 意图识别、回答生成 |
-| 工具调用 | MCP | Agent 调用外部工具 |
+| 前端 | Streamlit | 对话式 UI，展示 Agent 真实回答 |
+| API 网关 | FastAPI + Uvicorn | RESTful 入口 + 主 Agent 意图识别 |
+| A2A 协议 | `a2a-sdk==0.3.0` | 每个 Agent 是独立 A2A HTTP 服务（AgentCard + JSON-RPC） |
+| AI 编排 | LangChain + LangGraph | 每个 Agent 用 `create_agent` 自主调用工具 |
+| LLM | DeepSeek（兼容 OpenAI 格式） | 主 Agent 意图识别 + 各 Agent 自主决策 |
+| 工具调用 | MCP（FastMCP / stdio） | `@mcp.tool()` 注册真实工具 + MCP Client/Adapter |
+| 服务发现 | 自建 Registry（5000） | Agent 注册/心跳，主 Agent 按名称发现 URL |
 | 数据库 | MySQL 8.0（本地） | 持久化存储 |
 | 缓存 | Redis（本地） | 会话管理 |
 | 日志 | Elasticsearch（Docker） | 可选，日志分析 |
@@ -49,28 +50,34 @@
 
 | 模块 | 职责 | 边界 |
 | --- | --- | --- |
-| `agents/` | A2A Agent 实现 | 只负责 Agent 技能定义，不直接调用外部 API |
-| `mcp_servers/` | MCP 工具服务器 | 封装外部 API 调用，对 Agent 提供统一工具接口 |
-| `orchestrator/` | 工作流编排 | 管理 Agent 网络、路由、Flow 执行 |
-| `core/` | 核心逻辑 | 意图识别、槽位填充、上下文管理 |
-| `api/` | API 网关 | FastAPI 路由、A2A 端点暴露 |
+| `agents/` | 独立 A2A Agent 服务（weather/flight/train/hotel/itinerary） | 每个 Agent 拥有自己的大模型；工具必须通过 MCP 获取 |
+| `mcp_servers/` | 真正的 MCP Server（FastMCP + `@mcp.tool()`，stdio） | 只封装真实外部 API / MySQL，禁止任何 mock 数据 |
+| `orchestrator/` | 主 Agent 编排 | 发现远程 Agent URL 并通过 A2A 协议调用，不做进程内直接调用 |
+| `registry/` | A2A 注册与发现中心 | Agent 启动注册 + 心跳，暴露 `/.well-known/agents` |
+| `core/` | 核心逻辑 | MCP Client/Adapter、意图识别、槽位填充、上下文 |
+| `api/` | API 网关 | FastAPI 路由，调用主 Agent 路由与远程 A2A Agent |
 | `web/` | 前端 | Streamlit UI，调用 API 网关 |
 | `models/` | 数据模型 | Pydantic Schema + SQLAlchemy 模型 |
 | `configs/` | 配置管理 | 环境变量加载、配置类 |
 
-### 3.3 依赖方向
+### 3.3 依赖与调用方向
 
 ```text
-web/ → api/ → orchestrator/ → agents/ → mcp_servers/
+web/ → api/ → orchestrator/ ──(A2A HTTP)──→ agents/<name>/ ──(MCP stdio)──→ mcp_servers/
+                  │                              │
+                  └──────────→ registry/ ←───────┘（注册与发现）
                   ↓
-                core/
+                core/  （MCP client / intent / slots）
                   ↓
-               models/
-                  ↓
-              configs/
+               models/ → configs/
 ```
 
-**禁止反向依赖**：下层模块不得 import 上层模块。
+**关键约束**：
+
+- Agent 之间只能通过 A2A HTTP URL 通信，禁止在 orchestrator 中 `import` 并直接调用 Agent 类。
+- Agent 只能通过 MCP Client 调用工具，禁止在 Agent 中直接调用外部 API。
+- MCP Server 必须用 `@mcp.tool()` 注册工具，禁止只返回一个手写的工具列表。
+- 任何外部接口失败都必须返回明确错误，禁止伪造/模拟数据。
 
 ---
 
@@ -124,9 +131,9 @@ web/ → api/ → orchestrator/ → agents/ → mcp_servers/
 git commit -m "chore(config): add requirements.txt and .env.example"
 git commit -m "feat(model): add Pydantic schemas for user/itinerary/booking"
 git commit -m "feat(db): create MySQL tables with SQLAlchemy"
-git commit -m "feat(mcp): implement weather MCP server with QWeather API"
-git commit -m "feat(mcp): implement mock flight MCP server"
-git commit -m "feat(mcp): implement mock hotel MCP server"
+git commit -m "feat(mcp): implement real weather MCP server with FastMCP and AMap"
+git commit -m "feat(mcp): implement real flight MCP server with Aliyun API"
+git commit -m "feat(mcp): implement real hotel MCP server with AMap POI"
 git commit -m "feat(mcp): implement database MCP server"
 git commit -m "feat(agent): implement base A2A agent class"
 git commit -m "feat(agent): implement weather agent with skills"
@@ -159,35 +166,34 @@ git commit -m "test: add end-to-end integration tests"
 | `MYSQL_*` | 本地 MySQL | 本地安装 |
 | `REDIS_URL` | 本地 Redis | 本地安装 |
 
-> 航班/火车票为付费接口，免费额度极少，默认 `FLIGHT_MOCK_MODE` / `TRAIN_MOCK_MODE` 为 `true` 保护额度。
+> 项目已彻底移除 mock 开关。航班/火车票为付费接口，请自行控制调用频率；缺少 Key 或额度用尽时工具会返回明确错误，不会返回假数据。
 
 ### 5.2 端口规划
 
 | 服务 | 端口 | 说明 |
 | --- | --- | --- |
-| FastAPI 网关 | 8000 | API 入口 |
-| Weather Agent | 5001 | A2A 服务 |
-| Flight Agent | 5002 | A2A 服务 |
-| Train Agent | 5005 | A2A 服务 |
-| Hotel Agent | 5003 | A2A 服务 |
-| Itinerary Agent | 5004 | A2A 服务 |
-| weather_mcp | 5010 | MCP 工具 |
-| flight_mcp | 5011 | MCP 工具 |
-| hotel_mcp | 5012 | MCP 工具 |
-| db_mcp | 5013 | MCP 工具 |
-| train_mcp | 5014 | MCP 工具 |
+| A2A 注册中心 | 5000 | Agent 注册与发现 |
+| Weather Agent | 5001 | A2A HTTP 服务 |
+| Flight Agent | 5002 | A2A HTTP 服务 |
+| Hotel Agent | 5003 | A2A HTTP 服务 |
+| Itinerary Agent | 5004 | A2A HTTP 服务 |
+| Train Agent | 5005 | A2A HTTP 服务 |
+| FastAPI 网关 | 8000 | API 入口（主 Agent） |
 | Streamlit | 8501 | 前端 |
+| MCP Servers | 无端口 | 由各自 Agent 以 stdio 子进程启动 |
 | MySQL | 3306 | 本地 |
 | Redis | 6379 | 本地 |
 | ES | 9200 | Docker |
 
 ### 5.3 启动顺序
 
-1. MySQL / Redis / ES（基础设施）
-2. MCP 工具服务器（5010–5013）
-3. A2A Agent（5001–5004）
+1. MySQL（Itinerary Agent 的 db MCP 需要）
+2. A2A 注册中心（5000）
+3. A2A Agents（5001–5005；每个 Agent 会在首次请求时通过 stdio 拉起自己的 MCP Server）
 4. FastAPI 网关（8000）
 5. Streamlit 前端（8501）
+
+也提供一键启动：`python scripts/start_all.py`
 
 ---
 
@@ -199,6 +205,7 @@ git commit -m "test: add end-to-end integration tests"
 - ❌ 不要修改已稳定的接口，除非有明确需求
 - ❌ 不要引入文档中未提及的第三方库
 - ❌ 不要在 Agent 中直接调用外部 API，必须通过 MCP 工具
+- ❌ 不要返回 mock / 伪造数据；失败就返回明确错误
 - ❌ 不要硬编码 API Key，必须从环境变量读取
 - ❌ 不要跳过测试，每个模块必须有基本验证
 
@@ -236,9 +243,9 @@ pytest tests/ -v
 
 ## 8. 常见问题
 
-### Q1: python-a2a 库不存在？
+### Q1: A2A 用哪个库？
 
-**A**: `python-a2a` 是社区实现，可能版本不稳定。若不可用，可退化为自建 A2A 协议实现（基于 FastAPI 的 HTTP 调用 + Agent Card JSON）。
+**A**: 使用官方 `a2a-sdk==0.3.0`。每个 Agent 的 `__main__.py` 通过 `A2AStarletteApplication` 暴露标准 AgentCard 与 JSON-RPC HTTP 接口；客户端使用 `A2ACardResolver` + `A2AClient` 按 URL 调用。不要再用自建“伪 A2A”（直接 Python 调用 Agent 类）。
 
 ### Q2: DeepSeek 返回格式与 OpenAI 不同？
 
