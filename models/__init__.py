@@ -1,51 +1,30 @@
-"""Data models module for SmartVoyage."""
+"""Data models used by SmartVoyage."""
 
-from .schemas import (
-    UserCreate,
-    UserResponse,
-    ItineraryCreate,
-    ItineraryResponse,
-    BookingCreate,
-    BookingResponse,
-    ChatMessage,
-    ChatResponse,
-    IntentResult,
-    WeatherData,
-    FlightData,
-    TrainData,
-    HotelData,
-)
 from .database import (
     Base,
-    User,
-    Itinerary,
     Booking,
+    Itinerary,
+    User,
+    close_db,
     get_engine,
-    get_session,
+    get_session_factory,
     init_db,
+    seed_default_user,
 )
+from .schemas import IntentResult, IntentType
 
 __all__ = [
     # Pydantic schemas
-    "UserCreate",
-    "UserResponse",
-    "ItineraryCreate",
-    "ItineraryResponse",
-    "BookingCreate",
-    "BookingResponse",
-    "ChatMessage",
-    "ChatResponse",
+    "IntentType",
     "IntentResult",
-    "WeatherData",
-    "FlightData",
-    "TrainData",
-    "HotelData",
-    # SQLAlchemy models
+    # SQLAlchemy models / helpers
     "Base",
     "User",
     "Itinerary",
     "Booking",
     "get_engine",
-    "get_session",
+    "get_session_factory",
     "init_db",
+    "seed_default_user",
+    "close_db",
 ]

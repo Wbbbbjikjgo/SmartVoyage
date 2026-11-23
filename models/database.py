@@ -4,7 +4,6 @@ SQLAlchemy 数据库模型与工具函数
 """
 
 from datetime import datetime
-from typing import Generator
 from sqlalchemy import (
     create_engine,          # 创建数据库引擎
     Column,                 # 定义列
@@ -18,7 +17,7 @@ from sqlalchemy import (
     ForeignKey,             # 外键约束
     Text,                   # 长文本类型
 )
-from sqlalchemy.orm import sessionmaker, Session, relationship, declarative_base
+from sqlalchemy.orm import sessionmaker, relationship, declarative_base
 from configs.settings import settings
 import logging
 
@@ -208,25 +207,6 @@ def get_session_factory():
         # autoflush=False：不自动刷新，需要手动 flush
         _SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     return _SessionLocal
-
-
-def get_session() -> Generator[Session, None, None]:
-    """
-    获取数据库会话（用于 FastAPI 依赖注入）
-    Generator 类型表示这是一个生成器函数
-    使用 yield 返回会话，确保自动关闭
-
-    用法：
-        @app.get("/users")
-        def get_users(session: Session = Depends(get_session)):
-            return session.query(User).all()
-    """
-    SessionLocal = get_session_factory()
-    session = SessionLocal()  # 创建会话
-    try:
-        yield session  # 返回会话给调用方
-    finally:
-        session.close()  # 无论是否异常，最后都关闭会话
 
 
 def init_db():
