@@ -45,6 +45,7 @@ FastAPI 网关 / 主 Agent (8000)
 | Agent ↔ 工具调用 | `core/mcp_client.py` + `core/mcp_tool_adapter.py` | 连接 MCP Server，把 MCP 工具包装成 LangChain Tool 交给大模型 |
 | Agent ↔ Agent | **A2A（HTTP）** | 每个 Agent 是独立 HTTP 服务，通过 `AgentCard` 暴露 URL 与技能 |
 | 主 Agent 路由 | 大模型意图识别 + 注册中心发现 | 找到对应 Agent 的 URL 后通过 A2A 调用 |
+| 槽位追问 | 会话 `pending_task` + resume | 缺少必填槽位时中断提问，用户补充后自动继续原任务 |
 
 每个 Agent 内部都有自己的大模型（DeepSeek），工具列表由 MCP 动态发现后绑定给大模型，由大模型自主决定调用哪个工具、传什么参数。
 
