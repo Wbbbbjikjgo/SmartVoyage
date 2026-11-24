@@ -31,6 +31,7 @@ class ContextManager:
             "current_intent": None,
             "slots": {},
             "history": [],
+            "pending_task": None,
         }
         logger.info(f"Created session: {session_id}")
         return session_id
@@ -77,6 +78,29 @@ class ContextManager:
             "metadata": metadata or {},
         }
         session["messages"].append(message)
+        return True
+
+    def set_pending_task(self, session_id: str, task: Dict[str, Any]) -> bool:
+        """Store an interrupted task that is waiting for missing slots."""
+        session = self.sessions.get(session_id)
+        if not session:
+            return False
+        session["pending_task"] = task
+        return True
+
+    def get_pending_task(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Return the interrupted task for a session, if any."""
+        session = self.sessions.get(session_id)
+        if not session:
+            return None
+        return session.get("pending_task")
+
+    def clear_pending_task(self, session_id: str) -> bool:
+        """Clear the interrupted task for a session."""
+        session = self.sessions.get(session_id)
+        if not session:
+            return False
+        session["pending_task"] = None
         return True
 
     def update_intent(self, session_id: str, intent: str) -> bool:

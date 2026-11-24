@@ -2,6 +2,7 @@
 
 import pytest
 
+from core.context_manager import context_manager
 from models.schemas import IntentResult, IntentType
 from orchestrator.router import agent_router
 
@@ -65,12 +66,11 @@ async def test_route_train_maps_slots(monkeypatch):
     assert captured["agent"] == "train"
     assert '"start": "杭州"' in captured["prompt"]
     assert '"end": "北京"' in captured["prompt"]
-    assert '"date"' in captured["prompt"]  # 默认明天
 
 
 @pytest.mark.asyncio
-async def test_route_missing_slots(monkeypatch):
-    """Missing required slots produce a follow-up prompt, not a remote call."""
+async def test_route_missing_slots_interrupts(monkeypatch):
+    """Missing required slots should interrupt and ask, not call the agent."""
 
     async def fake_recognize(user_input):
         return IntentResult(
@@ -90,29 +90,128 @@ async def test_route_missing_slots(monkeypatch):
     result = await agent_router.route("帮我订个车票")
 
     assert result["success"] is True
-    assert "missing_slots" in result
+    assert result["needs_input"] is True
+    assert set(result["missing_slots"]) == {"start", "end"}
+    assert "出发城市" in result["question"]
 
 
-def test_prepare_parameters_flight_default_date():
+@pytest.mark.asyncio
+async def test_weather_interrupt_then_resume(monkeypatch):
+    """A missing location should be asked, then resumed with the user's answer."""
+    session_id = context_manager.create_session()
+    invocations = []
+
+    async def fake_recognize(user_input):
+        return IntentResult(
+            intent=IntentType.WEATHER_QUERY, confidence=0.9, slots={}
+        )
+
+    async def fake_invoke(agent, prompt):
+        invocations.append((agent, prompt))
+        return "http://127.0.0.1:5001", "北京晴，25°C。"
+
+    monkeypatch.setattr(
+        agent_router.intent_recognizer, "recognize_with_fallback", fake_recognize
+    )
+    monkeypatch.setattr(agent_router, "_invoke_remote", fake_invoke)
+
+    first = await agent_router.route("查一下天气", session_id=session_id)
+    assert first["needs_input"] is True
+    assert first["missing_slots"] == ["location"]
+    assert not invocations
+
+    second = await agent_router.route("北京", session_id=session_id)
+    assert second["success"] is True
+    assert second["data"]["answer"] == "北京晴，25°C。"
+    assert invocations and invocations[0][0] == "weather"
+    assert context_manager.get_pending_task(session_id) is None
+
+    context_manager.clear_session(session_id)
+
+
+@pytest.mark.asyncio
+async def test_flight_interrupt_date_then_resume(monkeypatch):
+    """Flight search should ask for the date, then resume once provided."""
+    session_id = context_manager.create_session()
+    invocations = []
+
+    async def fake_recognize(user_input):
+        return IntentResult(
+            intent=IntentType.FLIGHT_BOOKING,
+            confidence=0.9,
+            slots={"departure": "北京", "destination": "上海"},
+        )
+
+    async def fake_invoke(agent, prompt):
+        invocations.append((agent, prompt))
+        return "http://127.0.0.1:5002", "找到多个航班。"
+
+    monkeypatch.setattr(
+        agent_router.intent_recognizer, "recognize_with_fallback", fake_recognize
+    )
+    monkeypatch.setattr(agent_router, "_invoke_remote", fake_invoke)
+
+    first = await agent_router.route("北京到上海的机票", session_id=session_id)
+    assert first["needs_input"] is True
+    assert first["missing_slots"] == ["date"]
+    assert not invocations
+
+    second = await agent_router.route("明天", session_id=session_id)
+    assert second["success"] is True
+    assert invocations and invocations[0][0] == "flight"
+    assert '"date"' in invocations[0][1]
+
+    context_manager.clear_session(session_id)
+
+
+@pytest.mark.asyncio
+async def test_pending_task_can_be_cancelled(monkeypatch):
+    """User can cancel an interrupted task with 取消."""
+    session_id = context_manager.create_session()
+
+    async def fake_recognize(user_input):
+        return IntentResult(
+            intent=IntentType.WEATHER_QUERY, confidence=0.9, slots={}
+        )
+
+    async def fake_invoke(agent, prompt):
+        raise AssertionError("should not be invoked after cancel")
+
+    monkeypatch.setattr(
+        agent_router.intent_recognizer, "recognize_with_fallback", fake_recognize
+    )
+    monkeypatch.setattr(agent_router, "_invoke_remote", fake_invoke)
+
+    await agent_router.route("查天气", session_id=session_id)
+    result = await agent_router.route("取消", session_id=session_id)
+
+    assert result["cancelled"] is True
+    assert context_manager.get_pending_task(session_id) is None
+    context_manager.clear_session(session_id)
+
+
+def test_prepare_parameters_flight_keeps_date():
     params = agent_router._prepare_parameters(
         "flight",
         "search_flights",
-        {"departure": "北京", "destination": "上海"},
+        {"departure": "北京", "destination": "上海", "date": "2026-08-20"},
     )
     assert params["departure"] == "北京"
     assert params["arrival"] == "上海"
-    assert "date" in params  # 默认明天
+    assert params["date"] == "2026-08-20"
 
 
-def test_prepare_parameters_hotel_checkout():
+def test_prepare_parameters_hotel_keeps_guests():
     params = agent_router._prepare_parameters(
         "hotel",
         "search_hotels",
-        {"destination": "北京", "date": "2026-08-20", "duration": 3},
+        {"destination": "北京", "date": "2026-08-20", "guests": 2},
     )
     assert params["location"] == "北京"
     assert params["check_in"] == "2026-08-20"
-    assert params["check_out"] == "2026-08-23"
+    assert params["guests"] == 2
+    # 没有明确退房日期时，不伪造 check_out
+    assert "check_out" not in params
 
 
 @pytest.mark.asyncio
@@ -123,7 +222,7 @@ async def test_route_itinerary_planning(monkeypatch):
         return IntentResult(
             intent=IntentType.ITINERARY_PLANNING,
             confidence=0.9,
-            slots={"destination": "北京", "duration": 3},
+            slots={"destination": "北京", "duration": 3, "date": "2026-08-20"},
         )
 
     captured = {}
@@ -144,8 +243,46 @@ async def test_route_itinerary_planning(monkeypatch):
     assert result["agent"] == "itinerary"
     assert captured["destination"] == "北京"
     assert captured["duration"] == 3
-    assert "start_date" in captured  # 默认明天
+    assert captured["start_date"] == "2026-08-20"
     assert result["data"]["answer"] == "北京三日游计划（真实数据）"
+
+
+@pytest.mark.asyncio
+async def test_itinerary_missing_start_date_then_resume(monkeypatch):
+    """Itinerary planning should ask for start_date before calling the workflow."""
+    session_id = context_manager.create_session()
+    captured = {}
+
+    async def fake_recognize(user_input):
+        return IntentResult(
+            intent=IntentType.ITINERARY_PLANNING,
+            confidence=0.9,
+            slots={"destination": "北京", "duration": 3},
+        )
+
+    async def fake_execute(**kwargs):
+        captured.update(kwargs)
+        return {"success": True, "answer": "北京三日游计划"}
+
+    monkeypatch.setattr(
+        agent_router.intent_recognizer, "recognize_with_fallback", fake_recognize
+    )
+    from orchestrator.workflows import travel_workflow
+
+    monkeypatch.setattr(travel_workflow, "execute", fake_execute)
+
+    first = await agent_router.route("规划北京3日游", session_id=session_id)
+    assert first["needs_input"] is True
+    assert first["missing_slots"] == ["start_date"]
+    assert not captured
+
+    second = await agent_router.route("明天", session_id=session_id)
+    assert second["success"] is True
+    assert captured["destination"] == "北京"
+    assert captured["duration"] == 3
+    assert captured["start_date"]  # 已由“明天”解析为具体日期
+
+    context_manager.clear_session(session_id)
 
 
 def test_build_day_plan():

@@ -1,15 +1,17 @@
-"""聊天 API 路由：主 Agent 意图识别 + 远程 A2A Agent 调用。"""
+"""聊天 API 路由：主 Agent 意图识别 + 远程 A2A Agent 调用。
+
+槽位缺失时路由层会“中断”并追问；前端保持同一个 ``session_id`` 继续发送，
+路由层会自动 resume 原任务。
+"""
 
 import logging
-from datetime import date, timedelta
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from core.context_manager import context_manager
 from orchestrator.router import agent_router
-from orchestrator.workflows import travel_workflow
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +32,8 @@ class ChatResponse(BaseModel):
     intent: Optional[str] = None
     data: Optional[Dict[str, Any]] = None
     session_id: str
+    needs_input: Optional[bool] = None
+    missing_slots: Optional[List[str]] = None
 
 
 def _extract_answer(data: Dict[str, Any]) -> str:
@@ -55,29 +59,24 @@ def _compose_message(result: Dict[str, Any]) -> str:
     """Build the final chat message from a routed result."""
     data = result.get("data") or {}
 
-    if result.get("missing_slots"):
-        return data.get("message", "请补充更多信息。")
+    if result.get("cancelled"):
+        return data.get("message", "已取消本次查询。")
+
+    if result.get("needs_input") or result.get("missing_slots"):
+        return data.get("message", result.get("question", "请补充更多信息。"))
 
     if result.get("success") is False:
         return result.get("message") or "调用远程 Agent 失败，请检查服务状态。"
 
-    agent_name = result.get("agent")
-    if agent_name == "general":
+    if result.get("agent") == "general":
         return data.get("message", "我是 SmartVoyage 智能旅行助手。")
 
     answer = _extract_answer(data)
-    if not answer:
-        if result.get("message"):
-            return str(result["message"])
-        return "Agent 未返回有效内容，请检查对应 Agent 的日志。"
-
-    defaults_used = result.get("defaults_used")
-    if defaults_used:
-        defaults_desc = "、".join(
-            item.split("=")[1] if "=" in item else item for item in defaults_used
-        )
-        answer += f"\n\n（未指定日期，已默认使用：{defaults_desc}）"
-    return answer
+    if answer:
+        return answer
+    if result.get("message"):
+        return str(result["message"])
+    return "Agent 未返回有效内容，请检查对应 Agent 的日志。"
 
 
 @router.post("/", response_model=ChatResponse)
@@ -87,7 +86,7 @@ async def chat(request: ChatRequest) -> ChatResponse:
     context_manager.add_message(session_id, "user", request.message)
 
     try:
-        result = await agent_router.route(request.message)
+        result = await agent_router.route(request.message, session_id=session_id)
         message = _compose_message(result)
         context_manager.add_message(session_id, "assistant", message)
         return ChatResponse(
@@ -95,6 +94,8 @@ async def chat(request: ChatRequest) -> ChatResponse:
             intent=result.get("intent"),
             data=result.get("data") or result,
             session_id=session_id,
+            needs_input=result.get("needs_input"),
+            missing_slots=result.get("missing_slots"),
         )
     except Exception as exc:  # noqa: BLE001
         logger.exception("聊天接口出错")
@@ -105,58 +106,27 @@ async def chat(request: ChatRequest) -> ChatResponse:
 
 @router.post("/plan", response_model=ChatResponse)
 async def plan_travel(request: ChatRequest) -> ChatResponse:
-    """多 Agent 协作的旅行规划接口。"""
+    """多 Agent 协作的旅行规划接口（同样支持缺失槽位追问/resume）。"""
     session_id = request.session_id or context_manager.create_session()
     context_manager.add_message(session_id, "user", request.message)
 
     try:
-        from core.intent_recognizer import intent_recognizer
-        from core.slot_filler import slot_filler
-
-        intent_result = await intent_recognizer.recognize(request.message)
-        slots = slot_filler.fill_slots(request.message, intent_result.slots)
-
-        destination = slots.get("destination")
-        if not destination:
-            message = "请告诉我你想去哪个城市，我才能为你规划行程。"
-            context_manager.add_message(session_id, "assistant", message)
-            return ChatResponse(
-                message=message,
-                intent="itinerary_planning",
-                session_id=session_id,
-            )
-
-        start_date = (
-            slots.get("date")
-            or slots.get("start_date")
-            or (date.today() + timedelta(days=1)).isoformat()
-        )
-
-        result = await travel_workflow.execute(
-            user_id=1,
-            destination=destination,
-            start_date=start_date,
-            duration=int(slots.get("duration") or 3),
-            departure=slots.get("departure"),
-            budget=slots.get("budget"),
-            guests=int(slots.get("guests") or 1),
-            user_input=request.message,
-        )
-
-        message = result.get("answer") or result.get("error") or "行程规划未返回结果。"
+        result = await agent_router.plan(request.message, session_id=session_id)
+        message = _compose_message(result)
         context_manager.add_message(session_id, "assistant", message)
         return ChatResponse(
             message=message,
-            intent="itinerary_planning",
-            data=result,
+            intent=result.get("intent", "itinerary_planning"),
+            data=result.get("data") or result,
             session_id=session_id,
+            needs_input=result.get("needs_input"),
+            missing_slots=result.get("missing_slots"),
         )
     except Exception as exc:  # noqa: BLE001
         logger.exception("规划接口出错")
-        return ChatResponse(
-            message=f"规划行程时出现错误：{exc}",
-            session_id=session_id,
-        )
+        message = f"规划行程时出现错误：{exc}"
+        context_manager.add_message(session_id, "assistant", message)
+        return ChatResponse(message=message, session_id=session_id)
 
 
 @router.get("/session/{session_id}")

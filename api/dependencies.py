@@ -31,6 +31,7 @@ def get_current_session(session_id: Optional[str] = Header(None)) -> str:
                 "current_intent": None,
                 "slots": {},
                 "history": [],
+                "pending_task": None,
             }
 
     return session_id
