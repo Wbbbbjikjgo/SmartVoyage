@@ -17,30 +17,59 @@ class IntentRecognizer:
         """Initialize intent recognizer."""
         # Intent recognition prompt
         self.prompt = ChatPromptTemplate.from_messages([
-            ("system", """你是一个智能旅行助手的意图识别模块。你的任务是分析用户的输入，识别用户的意图类型，并提取关键信息（槽位）。
+            ("system", """你是一个智能旅行助手的意图识别与槽位提取模块。
 
 可用的意图类型：
-1. weather_query - 天气查询（用户询问某个城市的天气）
-2. flight_booking - 机票预订（用户想查询或预订机票）
-3. train_booking - 高铁/火车票查询（用户想查询或预订高铁票、火车票）
-4. hotel_booking - 酒店预订（用户想查询或预订酒店）
-5. itinerary_planning - 行程规划（用户想规划一个完整的旅行行程）
-6. general_qa - 通用问答（其他问题）
+1. weather_query - 天气查询
+2. flight_booking - 机票/航班查询
+3. train_booking - 高铁/火车票查询
+4. hotel_booking - 酒店或景点查询
+5. itinerary_planning - 完整行程规划
+6. general_qa - 其他通用问答
 
-请分析用户输入，返回JSON格式的结果，包含：
-- intent: 意图类型（从上述6种中选择）
-- confidence: 置信度（0-1之间的浮点数）
-- slots: 提取的槽位信息，可能包含：
-  - destination: 目的地城市
-  - departure: 出发城市
-  - date: 日期
-  - duration: 天数
-  - budget: 预算
-  - guests: 人数
-  - check_in: 入住日期
-  - check_out: 退房日期
+【槽位提取规则】
+1. 只提取用户明确说出、或能从原话直接确定的信息。
+2. 没有提到的字段不要输出、不要猜测、不要编造，也不要用示例值填充。
+3. 日期统一输出 YYYY-MM-DD；今天/明天/后天等按当前日期换算。
+4. 城市只输出中文城市名，去掉“市/省”等后缀；人数、天数、预算输出数字。
+5. 同一句话里同时出现出发地和目的地时，分别填 departure 和 destination。
+6. 无法确定的字段直接省略或填 null。
 
-只返回JSON，不要其他内容。"""),
+【可提取的 slots（按需提取，不要全部返回）】
+城市/地点：
+- destination: 目的地城市
+- departure: 出发城市
+- location: 查询城市（天气/酒店/景点，通常等于 destination）
+- start: 火车出发城市或车站（通常等于 departure）
+- end: 火车到达城市或车站（通常等于 destination）
+- arrival: 航班到达城市（通常等于 destination）
+
+日期/时长：
+- date: 出行日期
+- start_date: 行程开始日期
+- check_in: 酒店入住日期
+- check_out: 酒店退房日期
+- duration: 行程天数（整数）
+- days: 天气预报天数（整数）
+
+人数/预算：
+- guests: 出行或入住人数（整数）
+- passengers: 航班乘客人数（整数，通常等于 guests）
+- budget: 预算金额（数字，人民币）
+
+交通/酒店：
+- flight_no: 航班号（如 MU5100）
+- hotel_name: 酒店名称
+- is_high_speed: 是否只查高铁（1 或 0）
+- max_segments: 航班最大航段数（整数）
+
+其他：
+- limit: 返回数量上限（整数）
+- user_id: 用户 ID（只有用户明确写出时才提取）
+
+只返回 JSON，例如：
+{{"intent": "weather_query", "confidence": 0.9, "slots": {{"destination": "北京", "days": 3}}}}
+不要输出 Markdown 代码块或任何额外解释。"""),
             ("human", "{input}"),
         ])
 

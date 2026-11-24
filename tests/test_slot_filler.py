@@ -1,6 +1,6 @@
 """Unit tests for the slot filler."""
 
-from core.slot_filler import SlotFiller
+from core.slot_filler import SlotFiller, missing_slots, slot_present
 
 
 def test_extract_destination():
@@ -66,3 +66,63 @@ def test_extract_departure_strips_suffix():
     slots = filler.fill_slots("从商丘市到洛阳", {})
     assert slots["departure"] == "商丘"
     assert slots["destination"] == "洛阳"
+
+
+def test_extract_flight_no():
+    filler = SlotFiller()
+    slots = filler.fill_slots("查一下 CA1234 这个航班", {})
+    assert slots["flight_no"] == "CA1234"
+
+
+def test_extract_hotel_name_with_verb_prefix():
+    filler = SlotFiller()
+    slots = filler.fill_slots("帮我查一下北京饭店的详情", {})
+    assert slots["hotel_name"] == "北京饭店"
+
+
+def test_extract_forecast_days_chinese_number():
+    filler = SlotFiller()
+    slots = filler.fill_slots("北京未来三天天气怎么样", {})
+    assert slots["days"] == 3
+    assert slots["duration"] == 3
+
+
+def test_extract_labeled_check_in_check_out():
+    filler = SlotFiller()
+    slots = filler.fill_slots("8月20日入住，8月23日退房，住3晚", {})
+    assert slots["check_in"].endswith("08-20")
+    assert slots["check_out"].endswith("08-23")
+    assert slots["duration"] == 3
+
+
+def test_extract_direct_flight_max_segments():
+    filler = SlotFiller()
+    slots = filler.fill_slots("只要直飞航班", {})
+    assert slots["max_segments"] == 1
+
+
+def test_missing_slots_understands_aliases():
+    # 火车的 start/end 可以来自 departure/destination
+    slots = {"departure": "杭州", "destination": "北京"}
+    assert missing_slots(slots, "search_trains") == []
+    # 航班的 location 可以来自 destination
+    assert missing_slots({"destination": "北京"}, "search_hotels") == []
+    # 行程的 start_date 可以来自 date
+    assert missing_slots(
+        {"destination": "北京", "date": "2026-08-20", "duration": 3},
+        "plan_itinerary",
+    ) == []
+    # 航班缺少日期时必须报告 date
+    assert missing_slots({"departure": "北京", "destination": "上海"}, "search_flights") == ["date"]
+
+
+def test_extract_slot_value_for_short_follow_up():
+    filler = SlotFiller()
+    assert filler.extract_slot_value("location", "北京") == "北京"
+    assert filler.extract_slot_value("departure", "从北京出发") == "北京"
+    assert filler.extract_slot_value("flight_no", "MU5100") == "MU5100"
+    assert filler.extract_slot_value("hotel_name", "北京饭店") == "北京饭店"
+    assert filler.extract_slot_value("duration", "3天") == 3
+    assert filler.extract_slot_value("date", "明天")
+    assert slot_present({"destination": "北京"}, "location") is True
+    assert slot_present({"guests": 2}, "passengers") is True

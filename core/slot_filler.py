@@ -4,8 +4,8 @@
 """
 
 import logging
-from typing import Dict, Any, Optional
-from datetime import datetime, date, timedelta
+from typing import Dict, Any, List, Optional
+from datetime import date, timedelta
 import re
 
 # 获取当前模块的日志记录器，用于记录调试/错误信息
@@ -102,6 +102,150 @@ _TRAVEL_KEYWORDS = (
     "高铁", "动车", "火车", "火车票", "车票", "旅游", "旅行", "攻略",
     "三日游", "二日游", "一日游",
 )
+
+# ================================================================
+# MCP 工具的槽位定义（提取 + 校验的唯一来源）
+# ================================================================
+
+# 每个技能接受的参数（用于过滤，不代表都必填）
+SKILL_PARAMETERS: Dict[str, List[str]] = {
+    "get_current_weather": ["location"],
+    "get_forecast": ["location", "days"],
+    "search_flights": [
+        "departure", "arrival", "date", "passengers", "max_segments",
+    ],
+    "get_flight_detail": ["flight_no", "date", "departure", "arrival"],
+    "search_trains": ["start", "end", "date", "is_high_speed"],
+    "search_hotels": [
+        "location", "check_in", "check_out", "guests", "limit",
+    ],
+    "get_hotel_detail": ["hotel_name", "city", "date"],
+    "search_attractions": ["location", "limit"],
+    "plan_itinerary": [
+        "destination", "start_date", "duration", "departure", "budget", "guests",
+    ],
+}
+
+# 每个技能真正必填的槽位（缺失时触发追问 / interrupt）
+SKILL_REQUIRED_SLOTS: Dict[str, List[str]] = {
+    "get_current_weather": ["location"],
+    "get_forecast": ["location"],
+    "search_flights": ["departure", "arrival", "date"],
+    "get_flight_detail": ["flight_no", "date"],
+    "search_trains": ["start", "end"],
+    "search_hotels": ["location"],
+    "get_hotel_detail": ["hotel_name"],
+    "search_attractions": ["location"],
+    "plan_itinerary": ["destination", "start_date", "duration"],
+}
+
+# 同一个语义的不同字段名（例如目的地既可叫 destination 也可叫 arrival）
+SLOT_ALIASES: Dict[str, tuple] = {
+    "location": ("location", "destination"),
+    "departure": ("departure",),
+    "destination": ("destination",),
+    "arrival": ("arrival", "destination"),
+    "start": ("start", "departure"),
+    "end": ("end", "destination"),
+    "date": ("date",),
+    "start_date": ("start_date", "date"),
+    "check_in": ("check_in",),
+    "check_out": ("check_out",),
+    "duration": ("duration",),
+    "days": ("days", "duration"),
+    "budget": ("budget",),
+    "guests": ("guests", "passengers"),
+    "passengers": ("passengers", "guests"),
+    "flight_no": ("flight_no",),
+    "hotel_name": ("hotel_name",),
+    "is_high_speed": ("is_high_speed",),
+    "max_segments": ("max_segments",),
+    "limit": ("limit",),
+    "user_id": ("user_id",),
+}
+
+SLOT_LABELS: Dict[str, str] = {
+    "location": "城市",
+    "departure": "出发城市",
+    "destination": "目的地城市",
+    "arrival": "到达城市",
+    "start": "出发城市",
+    "end": "到达城市",
+    "date": "出行日期",
+    "start_date": "出发日期",
+    "check_in": "入住日期",
+    "check_out": "退房日期",
+    "duration": "行程天数",
+    "days": "预报天数",
+    "budget": "预算",
+    "guests": "人数",
+    "passengers": "人数",
+    "flight_no": "航班号",
+    "hotel_name": "酒店名称",
+    "is_high_speed": "是否高铁",
+    "max_segments": "最大航段数",
+    "limit": "返回数量",
+    "user_id": "用户 ID",
+}
+
+SLOT_EXAMPLES: Dict[str, str] = {
+    "location": "北京",
+    "departure": "北京",
+    "destination": "上海",
+    "arrival": "上海",
+    "start": "杭州",
+    "end": "北京",
+    "date": "明天 或 2026-09-01",
+    "start_date": "明天 或 2026-09-01",
+    "check_in": "2026-09-01",
+    "check_out": "2026-09-03",
+    "duration": "3",
+    "days": "3",
+    "budget": "5000",
+    "guests": "2",
+    "passengers": "2",
+    "flight_no": "MU5100",
+    "hotel_name": "北京饭店",
+    "max_segments": "1",
+    "limit": "10",
+    "user_id": "1",
+}
+
+_EMPTY_VALUES = (None, "", [], {})
+
+_CN_NUMBERS = {
+    "一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5,
+    "六": 6, "七": 7, "八": 8, "九": 9, "十": 10,
+}
+
+
+def _parse_number(value: str) -> Optional[int]:
+    """Parse an Arabic or simple Chinese numeral."""
+    if value.isdigit():
+        return int(value)
+    return _CN_NUMBERS.get(value)
+
+
+def slot_present(slots: Dict[str, Any], slot_name: str) -> bool:
+    """Return whether a slot (or any of its aliases) has a non-empty value."""
+    for alias in SLOT_ALIASES.get(slot_name, (slot_name,)):
+        value = slots.get(alias)
+        if value not in _EMPTY_VALUES:
+            return True
+    return False
+
+
+def required_slots(skill_name: str) -> List[str]:
+    """Return the required slot names for a skill."""
+    return list(SKILL_REQUIRED_SLOTS.get(skill_name, []))
+
+
+def missing_slots(slots: Dict[str, Any], skill_name: str) -> List[str]:
+    """Return required slots that are still missing (alias-aware)."""
+    return [
+        name for name in required_slots(skill_name)
+        if not slot_present(slots, name)
+    ]
 
 
 def _strip_city_suffix(name: str) -> str:
@@ -222,8 +366,103 @@ class SlotFiller:
             if any(kw in user_input for kw in ("高铁", "动车", "城际")):
                 slots["is_high_speed"] = 1
 
-        # 返回填充好的槽位字典
+        # ================================================================
+        # 第九步：航班号（航班详情查询）
+        # ================================================================
+        if "flight_no" not in slots:
+            flight_no = self._extract_flight_no(user_input)
+            if flight_no:
+                slots["flight_no"] = flight_no
+
+        # ================================================================
+        # 第十步：酒店名称（酒店详情查询）
+        # ================================================================
+        if "hotel_name" not in slots:
+            hotel_name = self._extract_hotel_name(user_input)
+            if hotel_name:
+                slots["hotel_name"] = hotel_name
+
+        # ================================================================
+        # 第十一步：天气预报天数
+        # ================================================================
+        if "days" not in slots:
+            days = self._extract_days(user_input)
+            if days:
+                slots["days"] = days
+            elif "duration" in slots and any(kw in user_input for kw in ("天气", "预报")):
+                # “未来三天天气”中的 3 天同时也是预报天数
+                slots["days"] = slots["duration"]
+
+        # ================================================================
+        # 第十二步：入住 / 退房日期（只提取明确标注的日期）
+        # ================================================================
+        if "check_in" not in slots:
+            check_in = self._extract_labeled_date(user_input, ("入住", "入店"))
+            if check_in:
+                slots["check_in"] = check_in
+        if "check_out" not in slots:
+            check_out = self._extract_labeled_date(user_input, ("退房", "离店"))
+            if check_out:
+                slots["check_out"] = check_out
+
+        # ================================================================
+        # 第十三步：其他 MCP 参数
+        # ================================================================
+        if "max_segments" not in slots:
+            max_segments = self._extract_max_segments(user_input)
+            if max_segments is not None:
+                slots["max_segments"] = max_segments
+        if "limit" not in slots:
+            limit = self._extract_limit(user_input)
+            if limit:
+                slots["limit"] = limit
+        if "user_id" not in slots:
+            user_id = self._extract_user_id(user_input)
+            if user_id:
+                slots["user_id"] = user_id
+
+        # ================================================================
+        # 第十四步：日期别名（行程开始日期）
+        # ================================================================
+        if "start_date" not in slots and "date" in slots:
+            slots["start_date"] = slots["date"]
+
+        # 返回填充好的槽位字典（绝不填没有提取到的槽位）
         return slots
+
+    def extract_slot_value(self, slot_name: str, text: str) -> Any:
+        """Extract a single slot value from a short follow-up answer.
+
+        用于 interrupt/resume：当用户只回答“北京”“明天”“3”这类短内容时，
+        把它直接映射到当前缺失的槽位。
+        """
+        if slot_name == "departure":
+            return self._extract_departure(text) or self._extract_city(text)
+        if slot_name in ("destination", "location", "start", "end", "arrival"):
+            return self._extract_city(text)
+        if slot_name in ("date", "start_date", "check_in", "check_out"):
+            return self._extract_date(text)
+        if slot_name == "duration":
+            return self._extract_duration(text)
+        if slot_name == "days":
+            return self._extract_days(text) or self._extract_duration(text)
+        if slot_name == "budget":
+            return self._extract_budget(text)
+        if slot_name in ("guests", "passengers"):
+            return self._extract_guests(text)
+        if slot_name == "flight_no":
+            return self._extract_flight_no(text)
+        if slot_name == "hotel_name":
+            return self._extract_hotel_name(text)
+        if slot_name == "max_segments":
+            return self._extract_max_segments(text)
+        if slot_name == "limit":
+            return self._extract_limit(text)
+        if slot_name == "user_id":
+            return self._extract_user_id(text)
+        if slot_name == "is_high_speed":
+            return 1 if any(kw in text for kw in ("高铁", "动车", "城际")) else None
+        return None
 
     # ================================================================
     # 辅助方法：日期规范化
@@ -455,11 +694,21 @@ class SlotFiller:
         Returns:
             天数（整数），如果没有则返回 None
         """
-        # -------- 匹配"X天" / "X日" --------
-        duration_pattern = r"(\d+)\s*[天日]"  # 数字 + 天/日
+        # -------- 匹配"X天" / "X晚"（避免把 8月20日 的 20 当成天数） --------
+        duration_pattern = (
+            r"(?<![\d\-/月])(\d+|[一二两三四五六七八九十])\s*[天晚]"
+        )
         match = re.search(duration_pattern, text)
         if match:
-            return int(match.group(1))
+            return _parse_number(match.group(1))
+
+        # -------- 匹配"X日游" / "X日行程" --------
+        day_trip_pattern = (
+            r"(?<![\d\-/月])(\d+|[一二两三四五六七八九十])\s*日(?:游|行程|旅行)"
+        )
+        match = re.search(day_trip_pattern, text)
+        if match:
+            return _parse_number(match.group(1))
 
         # -------- 匹配"一周" / "一个星期" --------
         if "一周" in text or "一个星期" in text:
@@ -545,6 +794,113 @@ class SlotFiller:
             return 3
 
         return None
+
+    # ================================================================
+    # 辅助方法：其他 MCP 参数
+    # ================================================================
+
+    @staticmethod
+    def _extract_flight_no(text: str) -> Optional[str]:
+        """提取航班号，如 CA1234 / MU8218。"""
+        match = re.search(r"[A-Za-z]{2}\d{3,4}", text)
+        return match.group(0).upper() if match else None
+
+    @staticmethod
+    def _extract_hotel_name(text: str) -> Optional[str]:
+        """提取酒店名称，如「北京饭店」「希尔顿酒店」。
+
+        会去掉「帮我查一下」「预定」「推荐一个」等动词前缀，避免把整句当成
+        酒店名。
+        """
+        suffixes = ("酒店", "宾馆", "饭店", "民宿", "客栈")
+        stopwords = (
+            "帮我查一下", "帮我", "请帮我", "帮忙", "请", "查询", "查一下",
+            "查下", "查", "搜索一下", "搜索", "搜一下", "搜", "看一下",
+            "看看", "看", "预订", "预定", "订一下", "订", "推荐一下",
+            "推荐", "介绍", "找一下", "找", "我想", "我要", "想", "要",
+            "一个", "一下", "住在", "住", "去", "在", "了", "的", "个",
+        )
+
+        for suffix in suffixes:
+            index = text.find(suffix)
+            if index < 2:
+                continue
+            # 取后缀前面最多 8 个字符，再反复去掉动词前缀
+            prefix = text[:index][-8:]
+            changed = True
+            while changed:
+                changed = False
+                for word in stopwords:
+                    if prefix.startswith(word) and len(prefix) > len(word):
+                        prefix = prefix[len(word):]
+                        changed = True
+                        break
+            prefix = prefix.strip(" ：:，,。.!！?？、")
+            if len(prefix) >= 2:
+                return f"{prefix}{suffix}"
+        return None
+
+    @staticmethod
+    def _extract_days(text: str) -> Optional[int]:
+        """提取天气预报天数，如「未来三天」「近 7 天天气」。"""
+        number = r"(\d+|[一二两三四五六七八九十])"
+        patterns = (
+            rf"(?:未来|接下来|近)\s*{number}\s*天",
+            rf"{number}\s*天(?:的)?(?:天气|预报)",
+            rf"(?:天气|预报)\s*{number}\s*天",
+        )
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if match:
+                return _parse_number(match.group(1))
+        return None
+
+    def _extract_labeled_date(
+        self, text: str, labels: tuple
+    ) -> Optional[str]:
+        """提取带标签的日期，如「8月20日入住」「退房：8月23日」。"""
+        date_expr = (
+            r"(\d{4}[-/]\d{1,2}[-/]\d{1,2}"
+            r"|\d{1,2}月\d{1,2}[日号]"
+            r"|今天|明天|后天|下周[一二三四五六日天])"
+        )
+        label_expr = "|".join(labels)
+        patterns = (
+            rf"(?:{label_expr})[^0-9，。,\n]{{0,8}}{date_expr}",
+            rf"{date_expr}[^，。,\n]{{0,6}}(?:{label_expr})",
+        )
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if match:
+                value = match.group(1)
+                return self._normalize_date_text(value) or self._extract_date(value)
+        return None
+
+    @staticmethod
+    def _extract_max_segments(text: str) -> Optional[int]:
+        """提取航班最大航段数；「直飞」视为 1 段。"""
+        if "直飞" in text:
+            return 1
+        match = re.search(
+            r"(?:最多|不超过|最大)\s*(\d+)\s*(?:个)?(?:航段|中转|经停)", text
+        )
+        return int(match.group(1)) if match else None
+
+    @staticmethod
+    def _extract_limit(text: str) -> Optional[int]:
+        """提取返回数量上限，如「推荐 5 家酒店」。"""
+        match = re.search(
+            r"(?:前|最多|返回|推荐|要)\s*(\d+)\s*(?:个|家|条|项)", text
+        )
+        return int(match.group(1)) if match else None
+
+    @staticmethod
+    def _extract_user_id(text: str) -> Optional[int]:
+        """提取显式写出的用户 ID，如「用户ID=1」。"""
+        match = re.search(
+            r"(?:用户|user)\s*(?:id|ID)?\s*[=:：]?\s*(\d+)", text
+        )
+        return int(match.group(1)) if match else None
 
 
 # ================================================================
