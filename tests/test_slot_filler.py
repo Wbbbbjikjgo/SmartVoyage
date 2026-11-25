@@ -116,6 +116,31 @@ def test_missing_slots_understands_aliases():
     assert missing_slots({"departure": "北京", "destination": "上海"}, "search_flights") == ["date"]
 
 
+def test_parse_answer_with_multiple_values_in_one_line():
+    filler = SlotFiller()
+
+    parsed = filler.parse_answer(
+        "北京 上海 明天", ["departure", "arrival", "date"]
+    )
+    assert parsed["departure"] == "北京"
+    assert parsed["arrival"] == "上海"
+    assert parsed["date"]
+
+    parsed = filler.parse_answer(
+        "从北京到上海，明天", ["departure", "arrival", "date"]
+    )
+    assert parsed["departure"] == "北京"
+    assert parsed["arrival"] == "上海"
+    assert parsed["date"]
+
+    parsed = filler.parse_answer(
+        "北京 明天 3天", ["destination", "start_date", "duration"]
+    )
+    assert parsed["destination"] == "北京"
+    assert parsed["start_date"]
+    assert parsed["duration"] == 3
+
+
 def test_extract_slot_value_for_short_follow_up():
     filler = SlotFiller()
     assert filler.extract_slot_value("location", "北京") == "北京"

@@ -126,6 +126,28 @@ SKILL_PARAMETERS: Dict[str, List[str]] = {
     ],
 }
 
+# 每个意图下可选的技能（skill 选择不再是一对一）
+INTENT_CANDIDATE_SKILLS: Dict[str, List[str]] = {
+    "weather_query": ["get_current_weather", "get_forecast"],
+    "flight_booking": ["search_flights", "get_flight_detail"],
+    "train_booking": ["search_trains"],
+    "hotel_booking": ["search_hotels", "get_hotel_detail", "search_attractions"],
+    "itinerary_planning": ["plan_itinerary"],
+}
+
+# 技能的中文说明（供意图识别提示词和调试信息使用）
+SKILL_DESCRIPTIONS: Dict[str, str] = {
+    "get_current_weather": "查询指定城市的实况天气",
+    "get_forecast": "查询指定城市未来几天的天气预报",
+    "search_flights": "按出发地/目的地/日期搜索航班",
+    "get_flight_detail": "按航班号查询航班详情",
+    "search_trains": "查询高铁/火车票",
+    "search_hotels": "搜索指定城市的酒店",
+    "get_hotel_detail": "查询指定酒店的详情",
+    "search_attractions": "搜索指定城市的景点",
+    "plan_itinerary": "规划完整的多日行程",
+}
+
 # 每个技能真正必填的槽位（缺失时触发追问 / interrupt）
 SKILL_REQUIRED_SLOTS: Dict[str, List[str]] = {
     "get_current_weather": ["location"],
@@ -430,16 +452,24 @@ class SlotFiller:
         # 返回填充好的槽位字典（绝不填没有提取到的槽位）
         return slots
 
-    def extract_slot_value(self, slot_name: str, text: str) -> Any:
+    def extract_slot_value(
+        self,
+        slot_name: str,
+        text: str,
+        exclude: Optional[str] = None,
+    ) -> Any:
         """Extract a single slot value from a short follow-up answer.
 
         用于 interrupt/resume：当用户只回答“北京”“明天”“3”这类短内容时，
-        把它直接映射到当前缺失的槽位。
+        把它直接映射到当前缺失的槽位。``exclude`` 用于区分出发地和目的地。
         """
-        if slot_name == "departure":
-            return self._extract_departure(text) or self._extract_city(text)
-        if slot_name in ("destination", "location", "start", "end", "arrival"):
-            return self._extract_city(text)
+        if slot_name in ("departure", "start"):
+            return self._extract_departure(text) or self._extract_city(
+                text, exclude=exclude
+            )
+        if slot_name in ("destination", "location", "end", "arrival"):
+            departure = exclude or self._extract_departure(text)
+            return self._extract_city(text, exclude=departure)
         if slot_name in ("date", "start_date", "check_in", "check_out"):
             return self._extract_date(text)
         if slot_name == "duration":
@@ -463,6 +493,76 @@ class SlotFiller:
         if slot_name == "is_high_speed":
             return 1 if any(kw in text for kw in ("高铁", "动车", "城际")) else None
         return None
+
+    def parse_answer(
+        self,
+        text: str,
+        missing: List[str],
+    ) -> Dict[str, Any]:
+        """Parse a follow-up answer against the currently missing slots.
+
+        支持用户一行输入多个值，例如：``北京 上海 明天``、
+        ``从北京到上海，3天，2人``。按缺失槽位顺序匹配，不会把城市值
+        同时塞进出发地和目的地。
+        """
+        parsed: Dict[str, Any] = {}
+        text = (text or "").strip()
+        if not text or not missing:
+            return parsed
+
+        # 只有一个缺失槽位：优先把整句/短回答映射到该槽位
+        if len(missing) == 1:
+            slot = missing[0]
+            value = self.extract_slot_value(slot, text)
+            if value not in _EMPTY_VALUES:
+                parsed[slot] = value
+                return parsed
+            generic = self.fill_slots(text, {})
+            for alias in SLOT_ALIASES.get(slot, (slot,)):
+                if generic.get(alias) not in _EMPTY_VALUES:
+                    parsed[slot] = generic[alias]
+                    break
+            return parsed
+
+        # 多个缺失槽位：先按空格/逗号/顿号拆分，再按缺失顺序逐一匹配
+        tokens = [item for item in re.split(r"[\s,，、;；/]+", text) if item]
+        remaining = list(missing)
+        used_indexes = set()
+        exclude: Optional[str] = None
+
+        for slot in list(remaining):
+            value = None
+            for index, token in enumerate(tokens):
+                if index in used_indexes:
+                    continue
+                candidate = self.extract_slot_value(slot, token, exclude=exclude)
+                if candidate not in _EMPTY_VALUES:
+                    value = candidate
+                    used_indexes.add(index)
+                    break
+            if value is None:
+                candidate = self.extract_slot_value(slot, text, exclude=exclude)
+                if candidate not in _EMPTY_VALUES:
+                    value = candidate
+
+            if value is not None:
+                parsed[slot] = value
+                remaining.remove(slot)
+                if slot in ("departure", "start"):
+                    exclude = value
+
+        # 仍未填上的槽位，尝试从整句的通用提取结果里补齐
+        if remaining:
+            generic = self.fill_slots(text, {})
+            for slot in list(remaining):
+                for alias in SLOT_ALIASES.get(slot, (slot,)):
+                    value = generic.get(alias)
+                    if value not in _EMPTY_VALUES:
+                        parsed[slot] = value
+                        remaining.remove(slot)
+                        break
+
+        return parsed
 
     # ================================================================
     # 辅助方法：日期规范化
@@ -644,6 +744,11 @@ class SlotFiller:
             year, month, day = match.groups()
             # 格式化为 YYYY-MM-DD（月份和日期补零到2位）
             return f"{year}-{int(month):02d}-{int(day):02d}"
+
+        # -------- 处理句子中包含的「今天/明天/后天」 --------
+        for label, offset in (("今天", 0), ("明天", 1), ("后天", 2)):
+            if label in text:
+                return (date.today() + timedelta(days=offset)).isoformat()
 
         # -------- 尝试相对日期（通过规范化方法）-------
         # 调用之前定义的规范化方法，处理"今天"、"明天"等

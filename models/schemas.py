@@ -10,7 +10,7 @@
 """
 
 from enum import Enum
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from pydantic import BaseModel, Field
 
@@ -32,3 +32,6 @@ class IntentResult(BaseModel):
     intent: IntentType
     confidence: float = Field(..., ge=0, le=1)
     slots: Dict[str, Any] = Field(default_factory=dict)
+    skill: Optional[str] = Field(
+        default=None, description="LLM 从完整技能列表中选择的 skill"
+    )

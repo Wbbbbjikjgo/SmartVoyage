@@ -5,6 +5,11 @@ import logging
 from typing import Dict, Any, Optional
 from langchain_core.prompts import ChatPromptTemplate
 from core.llm import get_chat_llm
+from core.slot_filler import (
+    INTENT_CANDIDATE_SKILLS,
+    SKILL_DESCRIPTIONS,
+    SKILL_PARAMETERS,
+)
 from models.schemas import IntentType, IntentResult
 
 logger = logging.getLogger(__name__)
@@ -15,9 +20,18 @@ class IntentRecognizer:
 
     def __init__(self):
         """Initialize intent recognizer."""
-        # Intent recognition prompt
-        self.prompt = ChatPromptTemplate.from_messages([
-            ("system", """你是一个智能旅行助手的意图识别与槽位提取模块。
+        skill_lines = [
+            f"- {name}（{SKILL_DESCRIPTIONS.get(name, '')}）：参数 {', '.join(params)}"
+            for name, params in SKILL_PARAMETERS.items()
+        ]
+        intent_skill_lines = [
+            f"- {intent}: {', '.join(skills)}"
+            for intent, skills in INTENT_CANDIDATE_SKILLS.items()
+        ]
+        skills_text = "\n".join(skill_lines)
+        intent_skill_text = "\n".join(intent_skill_lines)
+
+        system_prompt = """你是一个智能旅行助手的意图识别、技能选择与槽位提取模块。
 
 可用的意图类型：
 1. weather_query - 天气查询
@@ -26,6 +40,12 @@ class IntentRecognizer:
 4. hotel_booking - 酒店或景点查询
 5. itinerary_planning - 完整行程规划
 6. general_qa - 其他通用问答
+
+【意图与候选技能】
+__INTENT_SKILLS__
+
+【可选择的 skill（必须从以下完整列表中选择）】
+__SKILLS__
 
 【槽位提取规则】
 1. 只提取用户明确说出、或能从原话直接确定的信息。
@@ -67,9 +87,21 @@ class IntentRecognizer:
 - limit: 返回数量上限（整数）
 - user_id: 用户 ID（只有用户明确写出时才提取）
 
+【skill 选择规则】
+1. skill 必须从上面完整技能列表中选择，并且必须属于该 intent 的候选技能。
+2. 航班号 → get_flight_detail；按城市/日期查航班 → search_flights。
+3. 未来/预报/几天 → get_forecast；当前天气 → get_current_weather。
+4. 景点/好玩/攻略 → search_attractions；酒店名称 + 详情 → get_hotel_detail；否则 hotel_booking 默认 search_hotels。
+5. 无法确定时选择该 intent 默认的第一个候选技能。
+
 只返回 JSON，例如：
-{{"intent": "weather_query", "confidence": 0.9, "slots": {{"destination": "北京", "days": 3}}}}
-不要输出 Markdown 代码块或任何额外解释。"""),
+{{"intent": "weather_query", "skill": "get_current_weather", "confidence": 0.9, "slots": {{"destination": "北京", "days": 3}}}}
+不要输出 Markdown 代码块或任何额外解释。"""
+
+        system_prompt = system_prompt.replace("__INTENT_SKILLS__", intent_skill_text)
+        system_prompt = system_prompt.replace("__SKILLS__", skills_text)
+        self.prompt = ChatPromptTemplate.from_messages([
+            ("system", system_prompt),
             ("human", "{input}"),
         ])
 
@@ -112,10 +144,18 @@ class IntentRecognizer:
             confidence = float(result.get("confidence", 0.8))
             slots = result.get("slots", {})
 
+            skill = result.get("skill")
+            if skill not in SKILL_PARAMETERS:
+                skill = None
+            candidates = INTENT_CANDIDATE_SKILLS.get(intent.value, [])
+            if skill and candidates and skill not in candidates:
+                skill = None
+
             return IntentResult(
                 intent=intent,
                 confidence=confidence,
                 slots=slots,
+                skill=skill,
             )
 
         except json.JSONDecodeError as e:
