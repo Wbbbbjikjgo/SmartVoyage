@@ -77,7 +77,8 @@ web/ → api/ → orchestrator/ ──(A2A HTTP)──→ agents/<name>/ ──(
 - Agent 之间只能通过 A2A HTTP URL 通信，禁止在 orchestrator 中 `import` 并直接调用 Agent 类。
 - Agent 只能通过 MCP Client 调用工具，禁止在 Agent 中直接调用外部 API。
 - MCP Server 必须用 `@mcp.tool()` 注册工具，禁止只返回一个手写的工具列表。
-- 槽位必填规则统一放 `core/slot_filler.py`；缺失时 router 必须中断追问并保存 `pending_task`，用户补充后 resume，禁止直接丢弃请求。
+- 槽位必填规则、`SKILL_PARAMETERS`、`INTENT_CANDIDATE_SKILLS` 统一放 `core/slot_filler.py`；缺失时 router 必须中断追问并保存 `pending_task`，用户补充后 resume，禁止直接丢弃请求。
+- 意图识别模型必须从完整技能列表中选择 skill；强信号（航班号/景点/预报等）优先于模型选择。
 - 任何外部接口失败都必须返回明确错误，禁止伪造/模拟数据。
 
 ---

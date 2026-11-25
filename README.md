@@ -49,6 +49,8 @@ FastAPI 网关 / 主 Agent (8000)
 
 每个 Agent 内部都有自己的大模型（DeepSeek），工具列表由 MCP 动态发现后绑定给大模型，由大模型自主决定调用哪个工具、传什么参数。
 
+主 Agent 的 skill 选择也不再是一对一：完整的 `SKILL_PARAMETERS` 与 `INTENT_CANDIDATE_SKILLS` 会交给意图识别模型选择；航班号、景点关键词、预报关键词等强信号会覆盖模型选择，避免选错技能。
+
 ---
 
 ## 目录结构
