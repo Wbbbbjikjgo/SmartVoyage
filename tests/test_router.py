@@ -3,6 +3,7 @@
 import pytest
 
 from core.context_manager import context_manager
+from core.slot_filler import INTENT_CANDIDATE_SKILLS, SKILL_PARAMETERS
 from models.schemas import IntentResult, IntentType
 from orchestrator.router import agent_router
 
@@ -160,6 +161,41 @@ async def test_flight_interrupt_date_then_resume(monkeypatch):
     assert second["success"] is True
     assert invocations and invocations[0][0] == "flight"
     assert '"date"' in invocations[0][1]
+
+    context_manager.clear_session(session_id)
+
+
+@pytest.mark.asyncio
+async def test_resume_accepts_multiple_values_in_one_line(monkeypatch):
+    """User may answer all missing slots in one line: 北京 上海 明天."""
+    session_id = context_manager.create_session()
+    invocations = []
+
+    async def fake_recognize(user_input):
+        return IntentResult(
+            intent=IntentType.FLIGHT_BOOKING, confidence=0.9, slots={}
+        )
+
+    async def fake_invoke(agent, prompt):
+        invocations.append((agent, prompt))
+        return "http://127.0.0.1:5002", "找到多个航班。"
+
+    monkeypatch.setattr(
+        agent_router.intent_recognizer, "recognize_with_fallback", fake_recognize
+    )
+    monkeypatch.setattr(agent_router, "_invoke_remote", fake_invoke)
+
+    first = await agent_router.route("帮我订机票", session_id=session_id)
+    assert first["needs_input"] is True
+    assert set(first["missing_slots"]) == {"departure", "arrival", "date"}
+
+    second = await agent_router.route("北京 上海 明天", session_id=session_id)
+    assert second["success"] is True
+    assert invocations and invocations[0][0] == "flight"
+    prompt = invocations[0][1]
+    assert '"departure": "北京"' in prompt
+    assert '"arrival": "上海"' in prompt
+    assert '"date"' in prompt
 
     context_manager.clear_session(session_id)
 
@@ -334,3 +370,37 @@ def test_select_skill_hotel_attractions():
     assert agent_router._select_skill(
         IntentType.HOTEL_BOOKING, "北京有什么酒店推荐", {}
     ) == "search_hotels"
+
+
+def test_every_skill_belongs_to_an_intent():
+    covered = set()
+    for skills in INTENT_CANDIDATE_SKILLS.values():
+        covered.update(skills)
+    assert covered == set(SKILL_PARAMETERS)
+
+
+def test_skill_selection_uses_llm_for_ambiguous_cases():
+    # 没有强信号时采用 LLM 选择的 skill
+    assert agent_router._select_skill(
+        IntentType.WEATHER_QUERY,
+        "北京天气",
+        {"destination": "北京"},
+        llm_skill="get_forecast",
+    ) == "get_forecast"
+
+
+def test_skill_selection_overrides_llm_on_strong_signals():
+    # “未来”是强信号，必须选预报，即使 LLM 说实况
+    assert agent_router._select_skill(
+        IntentType.WEATHER_QUERY,
+        "北京未来三天天气",
+        {"destination": "北京"},
+        llm_skill="get_current_weather",
+    ) == "get_forecast"
+    # 景点关键词是强信号
+    assert agent_router._select_skill(
+        IntentType.HOTEL_BOOKING,
+        "北京有什么好玩的景点",
+        {},
+        llm_skill="search_hotels",
+    ) == "search_attractions"

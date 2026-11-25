@@ -19,6 +19,7 @@ from core.context_manager import context_manager
 from core.intent_recognizer import intent_recognizer
 from core.llm import get_chat_llm
 from core.slot_filler import (
+    INTENT_CANDIDATE_SKILLS,
     SKILL_PARAMETERS,
     SLOT_EXAMPLES,
     SLOT_LABELS,
@@ -50,14 +51,6 @@ class AgentRouter:
             IntentType.TRAIN_BOOKING: "train",
             IntentType.HOTEL_BOOKING: "hotel",
             IntentType.ITINERARY_PLANNING: "itinerary",
-        }
-
-        self.intent_to_skill: Dict[IntentType, str] = {
-            IntentType.WEATHER_QUERY: "get_current_weather",
-            IntentType.FLIGHT_BOOKING: "search_flights",
-            IntentType.TRAIN_BOOKING: "search_trains",
-            IntentType.HOTEL_BOOKING: "search_hotels",
-            IntentType.ITINERARY_PLANNING: "plan_itinerary",
         }
 
         self.slot_mapping: Dict[str, Dict[str, str]] = {
@@ -246,7 +239,9 @@ class AgentRouter:
                 "slots": slots,
             }
 
-        skill_name = self._select_skill(intent_result.intent, user_input, slots)
+        skill_name = self._select_skill(
+            intent_result.intent, user_input, slots, intent_result.skill
+        )
         return await self._dispatch_single(
             user_input, intent_result, slots, agent_name, skill_name, session_id
         )
@@ -290,22 +285,11 @@ class AgentRouter:
         skill_name = pending.get("skill", "")
         missing_before = missing_slots(slots, skill_name)
 
-        if len(missing_before) == 1:
-            # 只有一个缺失槽位时，把用户的短回答直接映射到该槽位，
-            # 避免“北京”被误当成目的地而污染其他字段。
-            slot_name = missing_before[0]
-            value = self.slot_filler.extract_slot_value(slot_name, user_input)
+        # 支持用户在一行里补充多个值（如「北京 上海 明天」）
+        parsed = self.slot_filler.parse_answer(user_input, missing_before)
+        for key, value in parsed.items():
             if value not in _EMPTY_VALUES:
-                slots[slot_name] = value
-        else:
-            new_slots = self.slot_filler.fill_slots(user_input, {})
-            for key, value in new_slots.items():
-                if value not in _EMPTY_VALUES:
-                    slots[key] = value
-            for slot_name in list(missing_slots(slots, skill_name)):
-                value = self.slot_filler.extract_slot_value(slot_name, user_input)
-                if value not in _EMPTY_VALUES:
-                    slots[slot_name] = value
+                slots[key] = value
 
         intent = IntentType(pending.get("intent", IntentType.GENERAL_QA.value))
         intent_result = IntentResult(
@@ -512,35 +496,65 @@ class AgentRouter:
         intent: IntentType,
         user_input: str,
         slots: Dict[str, Any],
+        llm_skill: Optional[str] = None,
     ) -> str:
-        """Choose the most appropriate skill under a given intent."""
+        """Choose the best skill from all candidates of an intent.
+
+        强信号（航班号/景点关键词/详情关键词/预报关键词）优先于 LLM；
+        其余情况优先采用 LLM 从完整 ``SKILL_PARAMETERS`` 中选择的 skill。
+        """
+        candidates = INTENT_CANDIDATE_SKILLS.get(intent.value, [])
+        strong = False
+
         if intent == IntentType.WEATHER_QUERY:
-            forecast_kw = ("明天", "后天", "未来", "预报", "几天", "下周", "本周", "最近")
-            if any(kw in user_input for kw in forecast_kw) or "days" in slots:
-                return "get_forecast"
-            return "get_current_weather"
+            forecast_kw = (
+                "明天", "后天", "未来", "预报", "几天", "下周", "本周", "最近",
+            )
+            strong = (
+                any(kw in user_input for kw in forecast_kw)
+                or "days" in slots
+                or "duration" in slots
+            )
+            rule_skill = "get_forecast" if strong else "get_current_weather"
 
-        if intent == IntentType.FLIGHT_BOOKING:
-            if slot_present(slots, "flight_no") or self._extract_flight_no(user_input):
-                return "get_flight_detail"
-            return "search_flights"
+        elif intent == IntentType.FLIGHT_BOOKING:
+            strong = (
+                slot_present(slots, "flight_no")
+                or self._extract_flight_no(user_input) is not None
+            )
+            rule_skill = "get_flight_detail" if strong else "search_flights"
 
-        if intent == IntentType.TRAIN_BOOKING:
-            return "search_trains"
+        elif intent == IntentType.TRAIN_BOOKING:
+            rule_skill = "search_trains"
 
-        if intent == IntentType.HOTEL_BOOKING:
+        elif intent == IntentType.HOTEL_BOOKING:
             attraction_kw = ("景点", "好玩", "游玩", "攻略", "旅游", "景区", "风景")
-            if any(kw in user_input for kw in attraction_kw):
-                return "search_attractions"
             detail_kw = ("详情", "电话", "设施", "评分", "地址")
-            if self._extract_hotel_name(user_input) and any(kw in user_input for kw in detail_kw):
-                return "get_hotel_detail"
-            return "search_hotels"
+            wants_attraction = any(kw in user_input for kw in attraction_kw)
+            wants_detail = (
+                self._extract_hotel_name(user_input) is not None
+                and any(kw in user_input for kw in detail_kw)
+            )
+            if wants_attraction:
+                strong = True
+                rule_skill = "search_attractions"
+            elif wants_detail:
+                strong = True
+                rule_skill = "get_hotel_detail"
+            else:
+                rule_skill = "search_hotels"
 
-        if intent == IntentType.ITINERARY_PLANNING:
-            return "plan_itinerary"
+        elif intent == IntentType.ITINERARY_PLANNING:
+            rule_skill = "plan_itinerary"
 
-        return self.intent_to_skill.get(intent, "")
+        else:
+            return ""
+
+        if strong:
+            return rule_skill
+        if llm_skill in candidates:
+            return llm_skill
+        return rule_skill
 
     def _extract_flight_no(self, text: str) -> Optional[str]:
         """Extract a flight number such as CA1234 / MU8218."""
@@ -603,7 +617,7 @@ class AgentRouter:
         """Return routing configuration and statically configured agents."""
         return {
             "intent_to_agent": {k.value: v for k, v in self.intent_to_agent.items()},
-            "intent_to_skill": {k.value: v for k, v in self.intent_to_skill.items()},
+            "intent_candidate_skills": INTENT_CANDIDATE_SKILLS,
             "agents": static_agents(),
         }
 
